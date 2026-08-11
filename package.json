@@ -1,0 +1,12 @@
+{
+  "name": "patter-voice-agent-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Patter Voice Infrastructure Cloudflare Containers Deployment Root",
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.1"
+  },
+  "devDependencies": {
+    "wrangler": "^3.100.0"
+  }
+}

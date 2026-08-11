@@ -1,9 +1,10 @@
 name = "patter-voice-agent"
 main = "src/worker/index.ts"
 compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
 
 # Container definition — built from our C++ ONNX Dockerfile
-[[containers]]
+[containers]
 class_name = "PatterInferenceContainer"
 image = "./Dockerfile"
 instance_type = "standard-4"  # 4 vCPU, 12 GiB RAM, 20 GB disk
