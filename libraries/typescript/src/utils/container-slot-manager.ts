@@ -23,6 +23,7 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import express from 'express';
+import { WebSocketServer, WebSocket as WSWebSocket } from 'ws';
 import { getLogger } from '../logger';
 
 export interface ContainerSlotManagerOptions {
@@ -300,6 +301,46 @@ export class ContainerSlotManager {
     });
 
     this.httpServer = http.createServer(app);
+
+    const wss = new WebSocketServer({ noServer: true });
+
+    this.httpServer.on('upgrade', (request, socket, head) => {
+      const host = request.headers.host || 'localhost';
+      const url = new URL(request.url ?? '', `http://${host}`);
+      if (url.pathname === '/media') {
+        const callSessionId = url.searchParams.get('call_session_id') || 
+                             (request.headers['x-call-id'] as string) || 
+                             `session-${Math.random().toString(36).substring(7)}`;
+
+        if (!this.acquire(callSessionId)) {
+          socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\n\r\nContainer at capacity\r\n');
+          socket.destroy();
+          return;
+        }
+
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          (ws as WSWebSocket & { callSessionId?: string }).callSessionId = callSessionId;
+          wss.emit('connection', ws, request);
+        });
+      } else {
+        socket.destroy();
+      }
+    });
+
+    wss.on('connection', (ws: WSWebSocket & { callSessionId?: string }) => {
+      getLogger().info(`[PATTER] Container media stream connected (sessionId=${ws.callSessionId})`);
+
+      ws.on('message', (data) => {
+        ws.send(JSON.stringify({ event: 'media_frame_ack', size: data.toString().length }));
+      });
+
+      ws.on('close', () => {
+        if (ws.callSessionId) {
+          getLogger().info(`[PATTER] Container media stream closed (sessionId=${ws.callSessionId})`);
+          this.release(ws.callSessionId);
+        }
+      });
+    });
 
     this.httpServer.listen(port, '0.0.0.0', () => {
       getLogger().info(
