@@ -1,7 +1,6 @@
 # Multi-stage production Dockerfile for Patter Voice Infrastructure on Cloudflare Containers
-# Explicitly targeting linux/amd64 architecture for Cloudflare Containers compatibility
 
-FROM --platform=linux/amd64 node:22-slim AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
 
 COPY package*.json ./
@@ -11,10 +10,10 @@ RUN cd libraries/typescript && npm ci
 COPY . .
 RUN cd libraries/typescript && npm run build
 
-FROM --platform=linux/amd64 node:22-slim AS runner
+FROM node:22-slim AS runner
 WORKDIR /app
 
-# Install C++ ONNX runtime dependencies (libgomp1), zstd, and curl for health check
+# Install runtime C++ dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libgomp1 zstd curl \
     && rm -rf /var/lib/apt/lists/*
@@ -22,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/libraries/typescript/dist ./dist
 COPY package*.json ./
 COPY libraries/typescript/package*.json ./libraries/typescript/
-RUN cd libraries/typescript && npm ci --omit=dev
+# Omit dev AND optional dependencies (@huggingface/transformers, onnxruntime-node) to keep image size < 15MB
+RUN cd libraries/typescript && npm ci --omit=dev --omit=optional --no-audit --no-fund
 
 ENV NODE_ENV=production
 ENV PATTER_OTEL_ENABLED=1
