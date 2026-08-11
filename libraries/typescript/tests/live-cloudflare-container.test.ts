@@ -135,7 +135,7 @@ describe('Live Cloudflare Container Direct Ingress Multi-Call Test Suite', () =>
         ws.close();
       }
     }
-  });
+  }, 30000);
 
   it('4. 4 Concurrent Telnyx Calls fully saturate standard-4 capacity limit', async () => {
     const clients: WebSocket[] = [];
@@ -165,7 +165,7 @@ describe('Live Cloudflare Container Direct Ingress Multi-Call Test Suite', () =>
         ws.close();
       }
     }
-  });
+  }, 30000);
 
   it('5. 5th Call attempt returns HTTP 503 Container at capacity when saturated', async () => {
     const clients: WebSocket[] = [];
@@ -209,6 +209,7 @@ describe('Live Cloudflare Container Direct Ingress Multi-Call Test Suite', () =>
 
     // Verify 5th call was either 503 rejected or redirected
     console.log(`Capacity Enforcement Test: 5th call 503 rejection status = ${is503Rejected}`);
-  });
+  }, 30000);
 });
+
 
