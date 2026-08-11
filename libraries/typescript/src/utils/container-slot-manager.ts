@@ -22,6 +22,7 @@
 
 import * as http from 'node:http';
 import * as os from 'node:os';
+import express from 'express';
 import { getLogger } from '../logger';
 
 export interface ContainerSlotManagerOptions {
@@ -266,25 +267,39 @@ export class ContainerSlotManager {
   }
 
   private startHttpServer(port: number): void {
-    this.httpServer = http.createServer((req, res) => {
-      if (req.method !== 'GET') {
-        res.writeHead(405, { Allow: 'GET' });
-        res.end();
-        return;
-      }
-      const url = req.url?.split('?')[0];
-      if (url === '/capacity' || url === '/health') {
-        const body = JSON.stringify(this.getCapacityStats());
-        res.writeHead(200, {
-          'Content-Type':   'application/json',
-          'Content-Length': Buffer.byteLength(body).toString(),
-        });
-        res.end(body);
-        return;
-      }
-      res.writeHead(404);
-      res.end();
+    const app = express();
+    app.disable('x-powered-by');
+
+    // GET /health — container health status
+    app.get('/health', (_req, res) => {
+      const stats = this.getCapacityStats();
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        capacity: stats,
+      });
     });
+
+    // GET /capacity — slot capacity stats for load balancing
+    app.get('/capacity', (_req, res) => {
+      res.json(this.getCapacityStats());
+    });
+
+    // GET /status — runtime statistics and uptime
+    app.get('/status', (_req, res) => {
+      res.json({
+        uptimeSeconds: Math.floor(process.uptime()),
+        memoryUsageMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+        capacity: this.getCapacityStats(),
+      });
+    });
+
+    // Clean JSON 404 handler for unmatched routes
+    app.use((req, res) => {
+      res.status(404).json({ error: 'Route not found', path: req.path });
+    });
+
+    this.httpServer = http.createServer(app);
 
     this.httpServer.listen(port, () => {
       getLogger().info(
