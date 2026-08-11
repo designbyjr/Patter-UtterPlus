@@ -1,15 +1,35 @@
-FROM python:3.13-slim
+# Multi-stage production Dockerfile for Patter Voice Infrastructure on Cloudflare Containers
+
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
-# Install Patter SDK with local mode dependencies
-RUN pip install --no-cache-dir "getpatter[local]" python-dotenv
+COPY package*.json ./
+COPY libraries/typescript/package*.json ./libraries/typescript/
+RUN cd libraries/typescript && npm ci
 
-# Copy your agent script and .env
 COPY . .
+RUN cd libraries/typescript && npm run build
 
-EXPOSE 8000
+FROM node:22-slim AS runner
+WORKDIR /app
 
-# Default: run the Python example at python/main.py
-# Override with: docker run patter python your_script.py
-CMD ["python", "python/main.py"]
+# Install C++ ONNX runtime dependencies (libgomp1), zstd, and curl for health check
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libgomp1 zstd curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/libraries/typescript/dist ./dist
+COPY --from=builder /app/libraries/typescript/node_modules ./node_modules
+COPY --from=builder /app/libraries/typescript/package.json ./package.json
+
+ENV NODE_ENV=production
+ENV PATTER_OTEL_ENABLED=1
+ENV MAX_CONTAINER_CALL_SLOTS=4
+ENV CAPACITY_HTTP_PORT=8080
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+EXPOSE 8080
+CMD ["node", "dist/index.js"]

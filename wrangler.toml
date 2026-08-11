@@ -1,0 +1,27 @@
+name = "patter-voice-agent"
+main = "src/worker/index.ts"
+compatibility_date = "2026-08-01"
+
+# Container definition — built from our C++ ONNX Dockerfile
+[[containers]]
+class_name = "PatterInferenceContainer"
+image = "./Dockerfile"
+instance_type = "standard-4"  # 4 vCPU, 12 GiB RAM, 20 GB disk
+max_instances = 10
+
+# Durable Object binding for the container
+[durable_objects]
+bindings = [
+  { name = "INFERENCE_CONTAINER", class_name = "PatterInferenceContainer" }
+]
+
+# Migration tag for Durable Object
+[[migrations]]
+tag = "v1"
+new_classes = ["PatterInferenceContainer"]
+
+[vars]
+MAX_CONTAINER_CALL_SLOTS = "4"
+CAPACITY_HTTP_PORT = "8080"
+PATTER_R2_BUCKET = "patter-models"
+PATTER_R2_ENDPOINT = "https://27e89563673d4bcd83625e2e12948bd4.r2.cloudflarestorage.com"
