@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/libraries/typescript/dist ./dist
 COPY package*.json ./
 COPY libraries/typescript/package*.json ./libraries/typescript/
-# Omit dev AND optional dependencies (@huggingface/transformers, onnxruntime-node) to keep image size < 15MB
-RUN cd libraries/typescript && npm ci --omit=dev --omit=optional --no-audit --no-fund
+# Install production dependencies and copy to root /app/node_modules so Node resolves express & ws
+RUN cd libraries/typescript && npm ci --omit=dev --omit=optional --no-audit --no-fund && cp -r node_modules /app/node_modules
 
 ENV NODE_ENV=production
 ENV PATTER_OTEL_ENABLED=1
