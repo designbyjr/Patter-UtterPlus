@@ -403,11 +403,13 @@ export class ContainerSlotManager {
       });
     });
 
-    this.httpServer.listen(port, '0.0.0.0', () => {
+    const bindIp = process.env['CHANNEL_BIND_IP'] || '0.0.0.0';
+    this.httpServer.listen(port, bindIp, () => {
       getLogger().info(
-        `[PATTER] ContainerSlotManager: capacity endpoint listening on 0.0.0.0:${port}`
+        `[PATTER] ContainerSlotManager: capacity endpoint listening on ${bindIp}:${port}`
       );
     });
+
 
     this.httpServer.on('error', (err) => {
       getLogger().warn(
