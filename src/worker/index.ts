@@ -2,10 +2,12 @@ import { Container, getContainer } from "@cloudflare/containers";
 
 export interface Env {
   INFERENCE_CONTAINER: DurableObjectNamespace;
-  MAX_CONTAINER_CALL_SLOTS: string;
-  CAPACITY_HTTP_PORT: string;
-  PATTER_R2_BUCKET: string;
-  PATTER_R2_ENDPOINT: string;
+  MAX_CONTAINER_CALL_SLOTS?: string;
+  CONTAINER_POOL_SIZE?: string;
+  CAPACITY_HTTP_PORT?: string;
+  PATTER_R2_BUCKET?: string;
+  PATTER_R2_ENDPOINT?: string;
+  PATTER_KV?: KVNamespace;
 }
 
 /**
@@ -27,28 +29,41 @@ export class PatterInferenceContainer extends Container {
   }
 }
 
-const POOL_SIZE = 3; // 3 Durable Object instances = 12 concurrent phone call slots (standard-4)
-
 /**
  * Cloudflare Worker Router entry point.
- * Load-balances calls across a pool of N PatterInferenceContainer Durable Object instances.
+ * Dynamically discovers and load-balances calls across a pool of N PatterInferenceContainer instances.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // 1. Target specific container if requested via query param (e.g. ?containerId=patter-pool-1)
+    // Dynamic pool size: configured via wrangler.toml env.CONTAINER_POOL_SIZE or default 3
+    const configuredPoolSize = parseInt(env.CONTAINER_POOL_SIZE || "3", 10);
+    const slotsPerContainer = parseInt(env.MAX_CONTAINER_CALL_SLOTS || "4", 10);
+
+    // 1. Direct target container routing via query param (e.g. ?containerId=patter-pool-1)
     const requestedContainerId = url.searchParams.get("containerId");
     if (requestedContainerId) {
       const container = getContainer(env.INFERENCE_CONTAINER, requestedContainerId);
       return container.fetch(request);
     }
 
-    // 2. Global Aggregated Health Check across all N Durable Object instances in the pool
-    if (url.pathname === "/health" || url.pathname === "/capacity") {
+    // 2. Dynamic Discovery & Aggregated Health Check across all active containers
+    if (url.pathname === "/health" || url.pathname === "/capacity" || url.pathname === "/status") {
       try {
-        const poolPromises = Array.from({ length: POOL_SIZE }, (_, i) => {
-          const cId = `patter-pool-${i}`;
+        // Discover container IDs: if Workers KV is configured, list active registered containers; else use configured pool
+        let activeContainerIds: string[] = [];
+
+        if (env.PATTER_KV) {
+          const list = await env.PATTER_KV.list({ prefix: "container:" });
+          activeContainerIds = list.keys.map(k => k.name.replace("container:", ""));
+        }
+
+        if (activeContainerIds.length === 0) {
+          activeContainerIds = Array.from({ length: configuredPoolSize }, (_, i) => `patter-pool-${i}`);
+        }
+
+        const poolPromises = activeContainerIds.map(cId => {
           const c = getContainer(env.INFERENCE_CONTAINER, cId);
           return c.fetch(new Request("http://localhost:8080/capacity"))
             .then(res => res.ok ? res.json() as Promise<any> : null)
@@ -61,41 +76,60 @@ export default {
         let totalAvailableSlots = 0;
 
         const instances = poolResults.map((stats, i) => {
+          const cId = activeContainerIds[i];
           if (stats && stats.maxSlots) {
             totalMaxSlots += stats.maxSlots;
             totalActiveCalls += stats.activeCalls || 0;
             totalAvailableSlots += stats.availableSlots || 0;
+          } else {
+            totalMaxSlots += slotsPerContainer;
+            totalAvailableSlots += slotsPerContainer;
           }
           return {
-            containerId: `patter-pool-${i}`,
-            status: stats ? "online" : "offline",
-            stats: stats || { maxSlots: 4, activeCalls: 0, availableSlots: 4 },
+            containerId: cId,
+            status: stats ? "online" : "standby",
+            stats: stats || { maxSlots: slotsPerContainer, activeCalls: 0, availableSlots: slotsPerContainer },
           };
         });
 
         return new Response(JSON.stringify({
           status: "healthy",
           timestamp: new Date().toISOString(),
-          poolSize: POOL_SIZE,
+          discoveryMode: env.PATTER_KV ? "kv-dynamic" : "env-configured",
+          poolSize: activeContainerIds.length,
           aggregatedCapacity: {
-            totalMaxSlots: totalMaxSlots || (POOL_SIZE * 4),
+            totalMaxSlots: totalMaxSlots || (activeContainerIds.length * slotsPerContainer),
             totalActiveCalls,
-            totalAvailableSlots: totalAvailableSlots || (POOL_SIZE * 4),
+            totalAvailableSlots: totalAvailableSlots || (activeContainerIds.length * slotsPerContainer),
           },
           instances,
         }), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (err: any) {
-        // Fallback single-instance check if pool query fails
+        // Resilient fallback to primary pool instance
         const fallbackContainer = getContainer(env.INFERENCE_CONTAINER, "patter-pool-0");
         return fallbackContainer.fetch(request);
       }
     }
 
-    // 3. Smart Load-Balanced WebSocket & HTTP Call Routing (/media)
-    // Select container with available call capacity, fallback to random round-robin
-    const poolIndex = Math.floor(Math.random() * POOL_SIZE);
+    // 3. Smart Call Routing (/media)
+    // Hash incoming call session ID (if available) or select round-robin from configured pool
+    const callSessionId = url.searchParams.get("call_session_id") || url.searchParams.get("CallSid") || "";
+    let poolIndex = 0;
+
+    if (callSessionId) {
+      // Deterministic hash pinning so retries/reconnections hit the exact same container
+      let hash = 0;
+      for (let i = 0; i < callSessionId.length; i++) {
+        hash = (hash << 5) - hash + callSessionId.charCodeAt(i);
+        hash |= 0;
+      }
+      poolIndex = Math.abs(hash) % configuredPoolSize;
+    } else {
+      poolIndex = Math.floor(Math.random() * configuredPoolSize);
+    }
+
     const targetContainerId = `patter-pool-${poolIndex}`;
     const targetContainer = getContainer(env.INFERENCE_CONTAINER, targetContainerId);
 
