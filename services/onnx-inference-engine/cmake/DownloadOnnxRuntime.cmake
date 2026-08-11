@@ -1,0 +1,26 @@
+# Download prebuilt ONNX Runtime C++ release binaries if not found locally
+set(ORT_VER "1.18.0")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(ORT_ARCH "linux-x64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    set(ORT_ARCH "osx-arm64")
+  else()
+    set(ORT_ARCH "osx-x64")
+  endif()
+else()
+  set(ORT_ARCH "linux-x64")
+endif()
+
+set(ORT_TGZ "onnxruntime-${ORT_ARCH}-${ORT_VER}.tgz")
+set(ORT_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_TGZ}")
+set(ORT_DEST "${CMAKE_BINARY_DIR}/_deps/onnxruntime")
+
+if(NOT EXISTS "${ORT_DEST}/include/onnxruntime_cxx_api.h")
+  message(STATUS "Downloading prebuilt ONNX Runtime v${ORT_VER} for ${ORT_ARCH} from ${ORT_URL}...")
+  file(DOWNLOAD "${ORT_URL}" "${CMAKE_BINARY_DIR}/${ORT_TGZ}" SHOW_PROGRESS)
+  file(ARCHIVE_EXTRACT INPUT "${CMAKE_BINARY_DIR}/${ORT_TGZ}" DESTINATION "${CMAKE_BINARY_DIR}/_deps/temp")
+  file(RENAME "${CMAKE_BINARY_DIR}/_deps/temp/onnxruntime-${ORT_ARCH}-${ORT_VER}" "${ORT_DEST}")
+endif()
+
+set(ONNXRUNTIME_ROOT "${ORT_DEST}")

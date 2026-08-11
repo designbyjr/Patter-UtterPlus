@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package patter.engine;
+
+// Patter C++ Native Inference Engine gRPC Service
+service PatterInferenceEngine {
+  // Pre-warm ONNX model shards from Cloudflare R2 into C++ engine memory / local disk
+  rpc WarmupModels (WarmupRequest) returns (WarmupResponse);
+
+  // Bi-directional streaming: TS sends 20ms PCM audio frames, C++ streams back real-time VAD & turn events
+  rpc StreamAudio (stream AudioFrameRequest) returns (stream InferenceEventResponse);
+
+  // Poll engine capacity stats (active slots, memory RSS, CPU utilization)
+  rpc GetCapacity (CapacityRequest) returns (CapacityResponse);
+}
+
+message WarmupRequest {
+  repeated string ten_vad_shards        = 1;
+  repeated string telnyx_eos_shards     = 2;
+  repeated string smart_turn_shards     = 3;
+  string          worker_endpoint       = 4;
+  repeated string speech_emotion_shards = 5;
+}
+
+message WarmupResponse {
+  bool   success             = 1;
+  int64  elapsed_ms          = 2;
+  string ten_vad_path        = 3;
+  string telnyx_eos_path      = 4;
+  string smart_turn_path      = 5;
+  string speech_emotion_path = 6;
+  string error_message       = 7;
+}
+
+message AudioFrameRequest {
+  string call_session_id = 1; // 16-character call session hash
+  bytes  pcm16_data       = 2; // Raw 20ms PCM 16kHz audio frame
+  uint64 sequence_number  = 3; // Incrementing block index (0, 1, 2...) for sliding window alignment
+}
+
+message InferenceEventResponse {
+  string call_session_id = 1;
+  float  vad_score        = 2; // TenVAD speech probability [0, 1]
+  float  eos_score        = 3; // Telnyx Wav2Vec2 EOS probability [0, 1]
+  bool   is_user_speaking = 4; // VAD threshold triggered
+  bool   is_turn_complete = 5; // End-of-utterance triggered
+  uint64 block_number     = 6; // Corresponding audio block index evaluated
+  string emotion_label    = 7; // Predicted emotion ("happy", "neutral", "angry"...)
+  float  emotion_score    = 8; // Emotion confidence score [0, 1]
+}
+
+message CapacityRequest {}
+
+message CapacityResponse {
+  string container_id       = 1;
+  string status             = 2; // "HEALTHY", "AT_CAPACITY", "DRAINING_COOLDOWN"
+  int32  active_calls       = 3;
+  int32  max_slots          = 4;
+  int32  available_slots    = 5;
+  int32  memory_rss_mb      = 6;
+  float  cpu_utilization_pct= 7;
+  int64  uptime_seconds     = 8;
+  bool   is_cooling_down    = 9;
+}
