@@ -32,5 +32,6 @@ ENV CAPACITY_HTTP_PORT=8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 
-EXPOSE 8080
+EXPOSE 8080 8081 8082 8083
 CMD ["node", "dist/container-server.js"]
+

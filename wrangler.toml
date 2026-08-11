@@ -8,13 +8,17 @@ workers_dev = true
 [[containers]]
 class_name = "PatterInferenceContainer"
 image = "./Dockerfile"
-instance_type = "standard-4"  # 4 vCPU, 12 GiB RAM, 20 GB disk
-max_instances = 10
+instance_type = "standard-4"  # 4 vCPU, 12 GiB RAM, 20 GB disk -> 4 calls max per Rule 11
+max_instances = 100           # Elastic scaling up to 100 containers (400 calls)
 
 # Bind the container as a Durable Object
 [[durable_objects.bindings]]
 name = "INFERENCE_CONTAINER"
 class_name = "PatterInferenceContainer"
+
+[[kv_namespaces]]
+binding = "PATTER_KV"
+id = "patter_container_pool_kv"
 
 # Run the migration for SQLite-backed Durable Object namespace
 [[migrations]]
@@ -26,3 +30,4 @@ MAX_CONTAINER_CALL_SLOTS = "4"
 CAPACITY_HTTP_PORT = "8080"
 PATTER_R2_BUCKET = "patter-models"
 PATTER_R2_ENDPOINT = "https://27e89563673d4bcd83625e2e12948bd4.r2.cloudflarestorage.com"
+

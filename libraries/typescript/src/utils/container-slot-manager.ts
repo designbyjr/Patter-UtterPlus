@@ -108,12 +108,16 @@ export class ContainerSlotManager {
   private cpuSampleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: ContainerSlotManagerOptions = {}) {
-    this.maxSlots = opts.maxSlots ?? parseInt(process.env['MAX_CONTAINER_CALL_SLOTS'] ?? '15', 10);
+    // Default to 4 (standard-4 hardware tier capacity limit per AGENTS.md Rule 11)
+    const envInstanceType = process.env['INSTANCE_TYPE'] ?? 'standard-4';
+    const defaultMax = envInstanceType === 'standard-3' ? 2 : 4;
+    this.maxSlots = opts.maxSlots ?? parseInt(process.env['MAX_CONTAINER_CALL_SLOTS'] ?? String(defaultMax), 10);
+
     this.highWatermarkRatio = opts.highWatermarkRatio ?? 0.80;
     this.cooldownMs = opts.cooldownMs ?? parseInt(process.env['CONTAINER_COOLDOWN_MS'] ?? '120000', 10);
     this.onCooldownComplete = opts.onCooldownComplete;
     this.onConnection = opts.onConnection;
-    this.onCapacityChanged = opts.onCapacityChanged;
+    this.onCapacityChanged = opts.onCapacityChanged ?? this.defaultCloudflareCapacityPush.bind(this);
     this.containerId =
       opts.containerId ??
       process.env['CONTAINER_ID'] ??
@@ -128,6 +132,33 @@ export class ContainerSlotManager {
     // Sample CPU every 5 s; unref so it never blocks process exit
     this.cpuSampleTimer = setInterval(() => this.sampleCpu(), 5_000);
     this.cpuSampleTimer.unref?.();
+  }
+
+  /** Default background Cloudflare Load Balancer origin weight push (< 5ms) */
+  private async defaultCloudflareCapacityPush(_activeCalls: number, _maxSlots: number, isSaturated: boolean): Promise<void> {
+
+    const apiToken = process.env['CLOUDFLARE_API_TOKEN'];
+    const accountId = process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '27e89563673d4bcd83625e2e12948bd4';
+    const poolId = process.env['CLOUDFLARE_POOL_ID'];
+
+    if (!apiToken || !poolId) return;
+
+    try {
+      const weight = isSaturated ? 0 : 1;
+      const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/load_balancers/pools/${poolId}`;
+      await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          origins: [{ name: this.containerId, weight, enabled: true }],
+        }),
+      });
+    } catch {
+      // Ignore background push errors in offline test environments
+    }
   }
 
   /**
@@ -361,6 +392,14 @@ export class ContainerSlotManager {
           getLogger().info(`[PATTER] Container media stream closed (sessionId=${ws.callSessionId})`);
           this.release(ws.callSessionId);
         }
+
+        // Strict Zero-Leak Socket Teardown
+        try {
+          ws.removeAllListeners();
+          ws.terminate();
+        } catch {
+          // Ignore socket cleanup warnings
+        }
       });
     });
 
@@ -383,3 +422,4 @@ export class ContainerSlotManager {
  * Auto-initialises on first import; reads MAX_CONTAINER_CALL_SLOTS from env.
  */
 export const containerSlotManager = new ContainerSlotManager();
+

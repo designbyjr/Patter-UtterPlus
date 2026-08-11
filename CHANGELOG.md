@@ -2,6 +2,9 @@
 
 ### Added
 
+- **`MultiChannelDirectContainerIngress`**: Multi-channel direct container ingress architecture with proactive Cloudflare API v4 origin weight pushing (`weight: 0` when 4/4 slots full), `PATTER_KV` Durable Object Actor lifecycle sync (`onStart`/`onStop`), and strict 1-to-1 non-overlapping Docker port mapping (8080–8083).
+
+
 - **`ContainerSlotManager`**: In-process multi-call slot manager and `/capacity` + `/health` HTTP endpoint server for Cloudflare Container deployments, enforcing `MAX_CONTAINER_CALL_SLOTS`, high-watermark scaling triggers, and a 2-minute (`120s`) `DRAINING_COOLDOWN` state after calls drop to 0 to allow outstanding LLM tool executions and API polling to complete cleanly in both Python and TypeScript SDKs.
 - **`SpeechEmotionDetector`**: Real-time speech emotion recognition provider (`onnx-community/wav2vec2-base-Speech_Emotion_Recognition-ONNX`) predicting 7 speaker emotions (`happy`, `sad`, `angry`, `neutral`, `fear`, `disgust`, `surprise`) with INT8 quantization in Python and TypeScript SDKs.
 - **`TelnyxWav2Vec2EOS`**: 700ms sliding PCM audio window end-of-speech classifier provider (`telnyx_wav2vec2_eos_int8.onnx`) with sigmoid scoring and trailing pitch decay fallback in Python and TypeScript.

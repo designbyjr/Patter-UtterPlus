@@ -22,16 +22,41 @@ export class PatterInferenceContainer extends Container {
 
   override async onStart() {
     console.log("[Patter] C++ ONNX Inference Container starting on Cloudflare Edge...");
+    if (this.env.PATTER_KV) {
+      try {
+        const containerId = this.ctx.id.toString();
+        const accountId = "27e89563673d4bcd83625e2e12948bd4";
+        const hostname = `container-${containerId}.${accountId}.internal`;
+        await this.env.PATTER_KV.put(`container:${containerId}`, JSON.stringify({
+          containerId,
+          hostname,
+          ports: [8080, 8081, 8082, 8083],
+          status: "ready",
+          startedAt: new Date().toISOString(),
+        }));
+      } catch (err) {
+        console.error("[Patter] Failed to register container in PATTER_KV:", err);
+      }
+    }
   }
 
   override async onStop() {
     console.log("[Patter] C++ ONNX Inference Container sleeping (scale-to-zero)...");
+    if (this.env.PATTER_KV) {
+      try {
+        const containerId = this.ctx.id.toString();
+        await this.env.PATTER_KV.delete(`container:${containerId}`);
+      } catch (err) {
+        console.error("[Patter] Failed to prune container from PATTER_KV:", err);
+      }
+    }
   }
 
   override async fetch(request: Request): Promise<Response> {
     return this.containerFetch(request, 8080);
   }
 }
+
 
 /**
  * Cloudflare Worker Router entry point.

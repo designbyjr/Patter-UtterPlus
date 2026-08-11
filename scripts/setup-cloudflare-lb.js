@@ -90,13 +90,32 @@ async function setupLoadBalancer() {
     minimum_origins: 1,
     origins: [
       {
-        name: 'patter-container-origin-1',
-        address: 'patter-voice-agent.saipenflow.workers.dev',
+        name: 'patter-container-origin-1-ch1',
+        address: `ch1.patter-container-1.${ACCOUNT_ID}.internal:8080`,
+        enabled: true,
+        weight: 1,
+      },
+      {
+        name: 'patter-container-origin-1-ch2',
+        address: `ch2.patter-container-1.${ACCOUNT_ID}.internal:8081`,
+        enabled: true,
+        weight: 1,
+      },
+      {
+        name: 'patter-container-origin-1-ch3',
+        address: `ch3.patter-container-1.${ACCOUNT_ID}.internal:8082`,
+        enabled: true,
+        weight: 1,
+      },
+      {
+        name: 'patter-container-origin-1-ch4',
+        address: `ch4.patter-container-1.${ACCOUNT_ID}.internal:8083`,
         enabled: true,
         weight: 1,
       },
     ],
   };
+
 
   const poolRes = await apiRequest(`/accounts/${ACCOUNT_ID}/load_balancers/pools`, 'POST', poolPayload);
   if (!poolRes.success) {
