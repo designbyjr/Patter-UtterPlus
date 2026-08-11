@@ -33,6 +33,7 @@ calls. It ships **two SDKs with full parity**: Python (`pip install getpatter`,
 7. **Async everywhere.** All I/O is `async` (Python `asyncio`, TS Promises).
    Logger: Python `logging.getLogger("getpatter")`, TS `getLogger()` — never
    `print()` / bare `console.*` in library code.
+8. **NO Workers to route voice traffic.** Never route real-time carrier audio streams (WebSockets / Webhooks) through intermediate Worker scripts due to Worker CPU and wall-time execution limits. Use direct container ingress routes, Cloudflare Tunnels (`cloudflared`), or Cloudflare Load Balancer direct origins.
 
 ## Before opening a PR
 
