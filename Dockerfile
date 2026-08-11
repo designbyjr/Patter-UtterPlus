@@ -1,7 +1,6 @@
 # Multi-stage production Dockerfile for Patter Voice Infrastructure on Cloudflare Containers
 
 FROM node:22-slim AS builder
-
 WORKDIR /app
 
 COPY package*.json ./
@@ -20,8 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/libraries/typescript/dist ./dist
-COPY --from=builder /app/libraries/typescript/node_modules ./node_modules
-COPY --from=builder /app/libraries/typescript/package.json ./package.json
+COPY package*.json ./
+COPY libraries/typescript/package*.json ./libraries/typescript/
+RUN cd libraries/typescript && npm ci --omit=dev
 
 ENV NODE_ENV=production
 ENV PATTER_OTEL_ENABLED=1
