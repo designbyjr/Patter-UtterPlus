@@ -19,7 +19,7 @@ bindings = [
 # Migration tag for Durable Object
 [[migrations]]
 tag = "v1"
-new_classes = ["PatterInferenceContainer"]
+new_sqlite_classes = ["PatterInferenceContainer"]
 
 [vars]
 MAX_CONTAINER_CALL_SLOTS = "4"
