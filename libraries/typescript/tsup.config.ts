@@ -14,7 +14,7 @@ import { defineConfig } from "tsup";
  * inside the ESM dist (e.g. cloudflared uses ``require("path")``).
  */
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/container-server.ts"],
   format: ["cjs", "esm"],
   dts: true,
   // Shim ``__dirname`` / ``__filename`` in the ESM bundle so the dashboard
