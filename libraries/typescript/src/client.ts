@@ -485,7 +485,7 @@ export class Patter {
     // Hard-fail if the caller passed a Patter Cloud ``apiKey``.  Cloud mode
     // does not exist in this SDK release; surface the change loudly so users
     // discover it immediately rather than silently sending traffic nowhere.
-    if ((options as { apiKey?: unknown }).apiKey !== undefined) {
+    if ((options as { apiKey?: unknown })?.apiKey !== undefined) {
       throw new Error(
         'Patter Cloud is not yet available in this SDK release. ' +
           'Use local mode with `carrier:` and `phoneNumber:`. ' +

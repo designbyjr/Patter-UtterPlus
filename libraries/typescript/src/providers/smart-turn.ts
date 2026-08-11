@@ -1,52 +1,18 @@
 /**
- * Smart-turn v3 semantic turn detector (ONNX).
+ * Smart-turn v3 semantic turn detector (ONNX & Unified Dual-Gated Pipeline).
  *
- * Audio-native end-of-utterance model from the pipecat-ai project
- * (https://github.com/pipecat-ai/smart-turn, Apache-2.0 — ~8 M params,
- * <100 ms CPU inference). Unlike a VAD — which only knows *whether* the
- * caller is producing sound — smart-turn looks at the prosody of the last
- * few seconds of speech and predicts whether the caller has *finished
- * their turn* or is merely pausing mid-sentence ("My phone number is…").
- *
- * Wiring: pass an instance as `agent.turnDetector`. The pipeline stream
- * handler then defers the STT finalize that normally fires on a VAD
- * `speech_end` until the model agrees the turn is complete (probability
- * ≥ {@link SmartTurnDetector.threshold}), holding for at most
- * `agent.maxSemanticHoldMs` (default 1200 ms) so a turn can never hang.
- *
- * Model file: the ONNX weights are NOT bundled with the SDK (~30 MB).
- * Download a `smart-turn-v3*.onnx` file from
- * https://huggingface.co/pipecat-ai/smart-turn-v3 and point the SDK at it
- * via the `PATTER_SMART_TURN_MODEL` environment variable or the
- * `modelPath` option of {@link SmartTurnDetector.load}.
- *
- * Preprocessing (matches `pipecat-ai/smart-turn` `inference.py` exactly —
- * the v3 ONNX graph takes Whisper log-mel features, not a raw waveform):
- *
- *  1. int16 LE PCM → float in [-1, 1] (÷ 32768).
- *  2. Keep the LAST 8 s of 16 kHz audio; left-pad with zeros to exactly
- *     128 000 samples so the speech sits at the END of the window
- *     (`truncate_audio_to_last_n_seconds`).
- *  3. Zero-mean / unit-variance normalize the full padded window
- *     (`WhisperFeatureExtractor(..., do_normalize=True)`).
- *  4. Whisper log-mel: 400-point Hann STFT (hop 160, reflect-padded,
- *     centered), 80 Slaney-scale mel filters, `log10` with 1e-10 floor,
- *     clamp to `max - 8`, scale `(x + 4) / 4`, drop the trailing frame
- *     → `(80, 800)` float32.
- *  5. `session.run({ input_features })` — the graph applies the sigmoid
- *     internally and returns the end-of-turn probability directly.
- *     `probability > 0.5` ⇒ turn complete.
- *
- * `onnxruntime-node` is loaded lazily as an optional dependency (same
- * pattern as `providers/silero-vad.ts`). The feature extraction is pure
- * TypeScript (mixed-radix FFT) and yields to the event loop periodically
- * so a per-turn prediction never blocks inbound audio handling.
+ * Composes TurnSenseDetector (text heuristics) + TelnyxWav2Vec2EOS (audio prosody 700ms window @ 100ms step)
+ * with ONNX model support for pipecat-ai smart-turn-v3.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getLogger } from '../logger';
+import { fetchModelFromR2 } from '../utils/r2-model-loader';
+
 import type { TurnDetectorProvider } from '../types';
+import { TurnSenseDetector } from './turn-sense';
+import { TelnyxWav2Vec2EOS } from './telnyx-wav2vec2';
 import {
   loadOnnxRuntime,
   type OnnxInferenceSession,
@@ -54,25 +20,16 @@ import {
   type OnnxTensor,
 } from './silero-vad';
 
-/** Env var consulted by {@link SmartTurnDetector.load} when no `modelPath` is given. */
 export const SMART_TURN_MODEL_ENV_VAR = 'PATTER_SMART_TURN_MODEL';
-
-/** Smart-turn v3 input contract — 16 kHz mono, up to 8 s of context. */
 export const SMART_TURN_SAMPLE_RATE = 16000;
 export const SMART_TURN_MAX_SECONDS = 8;
-export const SMART_TURN_MAX_SAMPLES = SMART_TURN_SAMPLE_RATE * SMART_TURN_MAX_SECONDS; // 128 000
-
-/**
- * Default decision threshold per the smart-turn v3 docs
- * (`prediction = 1 if probability > 0.5 else 0`).
- */
+export const SMART_TURN_MAX_SAMPLES = SMART_TURN_SAMPLE_RATE * SMART_TURN_MAX_SECONDS;
 export const DEFAULT_SMART_TURN_THRESHOLD = 0.5;
 
-// Whisper feature-extractor constants (WhisperFeatureExtractor defaults).
 const N_FFT = 400;
 const HOP_LENGTH = 160;
 const N_MELS = 80;
-const N_FRAMES = 800; // 8 s × 100 frames/s after dropping the trailing frame
+const N_FRAMES = 800;
 const MEL_FLOOR = 1e-10;
 const NORM_EPS = 1e-7;
 
@@ -80,38 +37,22 @@ const DOWNLOAD_HINT =
   'Download a smart-turn-v3 ONNX file from ' +
   'https://huggingface.co/pipecat-ai/smart-turn-v3 and either set the ' +
   `${SMART_TURN_MODEL_ENV_VAR} environment variable to its path or pass ` +
-  'modelPath to SmartTurnDetector.load(). The model is not bundled with ' +
-  'the SDK (~30 MB).';
+  'modelPath to SmartTurnDetector.load().';
 
-/** Options accepted by {@link SmartTurnDetector.load}. */
 export interface SmartTurnDetectorOptions {
-  /**
-   * End-of-turn probability at/above which the turn is considered
-   * complete. Default 0.5 per the smart-turn v3 reference.
-   */
   readonly threshold?: number;
-  /**
-   * Path to the `smart-turn-v3*.onnx` file. Falls back to the
-   * `PATTER_SMART_TURN_MODEL` environment variable when omitted.
-   */
   readonly modelPath?: string;
-  /** Restrict ONNX Runtime to the CPU execution provider (default true). */
   readonly forceCpu?: boolean;
+  readonly turnSensePath?: string;
+  readonly telnyxEosPath?: string;
 }
 
-/**
- * Resolve the smart-turn ONNX file from the option or the env var.
- * Throws with download instructions when unset or missing.
- * @internal
- */
 export function resolveSmartTurnModelPath(modelPath?: string): string {
   let resolved = modelPath;
   if (!resolved) {
     resolved = (process.env[SMART_TURN_MODEL_ENV_VAR] ?? '').trim();
     if (!resolved) {
-      throw new Error(
-        `SmartTurnDetector has no model file configured. ${DOWNLOAD_HINT}`,
-      );
+      throw new Error(`SmartTurnDetector has no model file configured. ${DOWNLOAD_HINT}`);
     }
   }
   if (!fs.existsSync(resolved)) {
@@ -123,13 +64,23 @@ export function resolveSmartTurnModelPath(modelPath?: string): string {
   return path.resolve(resolved);
 }
 
-// ---------------------------------------------------------------------------
-// Whisper log-mel feature extraction (TS port of WhisperFeatureExtractor —
-// verified against `transformers.WhisperFeatureExtractor(chunk_length=8)`
-// via the Python twin, getpatter/providers/smart_turn.py)
-// ---------------------------------------------------------------------------
+export async function resolveSmartTurnModelPathAsync(modelPath?: string): Promise<string> {
+  let resolved = modelPath;
+  if (!resolved) {
+    resolved = (process.env[SMART_TURN_MODEL_ENV_VAR] ?? '').trim();
+  }
+  if (resolved && fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+    return path.resolve(resolved);
+  }
+  const shardsEnv = process.env['PATTER_SMART_TURN_SHARDS'];
+  if (shardsEnv) {
+    const shardKeys = shardsEnv.split(',').map((s) => s.trim()).filter(Boolean);
+    return await fetchModelFromR2({ shardKeys, modelKey: 'smart_turn_v3' });
+  }
+  return resolveSmartTurnModelPath(modelPath);
+}
 
-/** Hertz → mel on the Slaney scale (linear < 1 kHz, log above). */
+
 function hertzToMelSlaney(freq: number): number {
   const minLogHertz = 1000.0;
   const minLogMel = 15.0;
@@ -140,7 +91,6 @@ function hertzToMelSlaney(freq: number): number {
   return (3.0 * freq) / 200.0;
 }
 
-/** Mel → Hertz, inverse of {@link hertzToMelSlaney}. */
 function melToHertzSlaney(mels: number): number {
   const minLogHertz = 1000.0;
   const minLogMel = 15.0;
@@ -152,23 +102,16 @@ function melToHertzSlaney(mels: number): number {
 }
 
 interface SparseMelFilter {
-  /** First FFT bin with non-zero weight. */
   readonly startBin: number;
-  /** Triangular filter weights for bins `startBin .. startBin+len-1`. */
   readonly weights: Float64Array;
 }
 
 let melFilterbankCache: SparseMelFilter[] | null = null;
 
-/**
- * 80-filter Slaney-normalized triangular mel filterbank over 201 FFT bins
- * (`mel_filter_bank(norm="slaney", mel_scale="slaney")`), stored sparsely
- * (each triangle covers only a handful of bins). Cached after first build.
- */
 function melFilterbank(): SparseMelFilter[] {
   if (melFilterbankCache) return melFilterbankCache;
 
-  const numBins = 1 + N_FFT / 2; // 201
+  const numBins = 1 + N_FFT / 2;
   const fftFreqs = new Float64Array(numBins);
   for (let k = 0; k < numBins; k++) {
     fftFreqs[k] = (k * (SMART_TURN_SAMPLE_RATE / 2)) / (numBins - 1);
@@ -186,7 +129,7 @@ function melFilterbank(): SparseMelFilter[] {
     const lower = filterFreqs[m];
     const center = filterFreqs[m + 1];
     const upper = filterFreqs[m + 2];
-    const enorm = 2.0 / (upper - lower); // Slaney energy normalization
+    const enorm = 2.0 / (upper - lower);
     const dense = new Float64Array(numBins);
     let startBin = -1;
     let endBin = -1;
@@ -212,7 +155,6 @@ function melFilterbank(): SparseMelFilter[] {
 
 let hannWindowCache: Float64Array | null = null;
 
-/** Periodic 400-point Hann window (`window_function(400, "hann")`). */
 function hannWindow(): Float64Array {
   if (!hannWindowCache) {
     const w = new Float64Array(N_FFT);
@@ -224,8 +166,6 @@ function hannWindow(): Float64Array {
   return hannWindowCache;
 }
 
-// 25-point naive DFT twiddle tables (cos/sin of -2πjk/25) — the odd base
-// case of the mixed-radix FFT below. 400 = 2^4 × 25.
 let dft25Cos: Float64Array | null = null;
 let dft25Sin: Float64Array | null = null;
 
@@ -244,10 +184,6 @@ function dft25Tables(): { cos: Float64Array; sin: Float64Array } {
   return { cos: dft25Cos, sin: dft25Sin };
 }
 
-// Per-size butterfly twiddle tables (cos/sin of -2πk/n for k < n/2) and
-// reusable scratch buffers. The FFT runs once per STFT frame (801 frames
-// per prediction) — recomputing trig in the butterfly loop dominated the
-// profile, and per-call scratch allocation churned the GC.
 const fftTwiddleCos = new Map<number, Float64Array>();
 const fftTwiddleSin = new Map<number, Float64Array>();
 const fftScratch = new Map<number, [Float64Array, Float64Array, Float64Array, Float64Array]>();
@@ -273,35 +209,15 @@ function fftTables(n: number): { cos: Float64Array; sin: Float64Array } {
 function fftScratchFor(n: number): [Float64Array, Float64Array, Float64Array, Float64Array] {
   let bufs = fftScratch.get(n);
   if (!bufs) {
-    bufs = [
-      new Float64Array(n),
-      new Float64Array(n),
-      new Float64Array(n),
-      new Float64Array(n),
-    ];
+    bufs = [new Float64Array(n), new Float64Array(n), new Float64Array(n), new Float64Array(n)];
     fftScratch.set(n, bufs);
   }
   return bufs;
 }
 
-// Dedicated output scratch for the 25-point base case. MUST be distinct from
-// `fftScratchFor(25)`: an n=50 parent stores its even/odd halves in the
-// size-25 scratch and then runs the base case ON those very arrays — if the
-// base case also wrote its output through `fftScratchFor(25)` it would (a)
-// alias its own input (out[k] clobbers in[k] while later k's still read it)
-// and (b) let the odd-half DFT overwrite the parent's stored even-half
-// results before the butterfly combines them.
 const dft25OutRe = new Float64Array(25);
 const dft25OutIm = new Float64Array(25);
 
-/**
- * In-place complex FFT for n = 2^a × 25 (Cooley-Tukey radix-2 recursion
- * with a table-driven 25-point naive DFT base case). Whisper's STFT uses
- * n_fft = 400, which is not a power of two, so a plain radix-2 FFT cannot
- * be used without changing the bin frequencies. Single-threaded by
- * design: scratch buffers are module-level and reused across calls (safe
- * — Node executes the synchronous frame loop without interleaving).
- */
 function fftComplex(re: Float64Array, im: Float64Array): void {
   const n = re.length;
   if (n === 25) {
@@ -325,10 +241,6 @@ function fftComplex(re: Float64Array, im: Float64Array): void {
   }
   if (n === 1) return;
   const half = n / 2;
-  // Recursion uses scratch keyed by the CHILD size; the child's own
-  // recursion uses the next size down and the 25-point base case writes
-  // through its dedicated `dft25Out*` buffers, so levels never alias. The
-  // child data is fully consumed back into re/im before this frame returns.
   const [evenRe, evenIm, oddRe, oddIm] = fftScratchFor(half);
   for (let i = 0; i < half; i++) {
     evenRe[i] = re[2 * i];
@@ -351,15 +263,6 @@ function fftComplex(re: Float64Array, im: Float64Array): void {
   }
 }
 
-/**
- * Truncate/left-pad `samples` to exactly 8 s and normalize.
- *
- * Mirrors smart-turn's `truncate_audio_to_last_n_seconds` (keep the END
- * of the audio, pad zeros at the BEGINNING) followed by the feature
- * extractor's `do_normalize=True` zero-mean / unit-variance pass over the
- * full padded window. Returns a Float64Array of length 128 000.
- * @internal — exported for tests.
- */
 export function prepareInputWindow(samples: ArrayLike<number>): Float64Array {
   const out = new Float64Array(SMART_TURN_MAX_SAMPLES);
   const n = samples.length;
@@ -385,36 +288,15 @@ export function prepareInputWindow(samples: ArrayLike<number>): Float64Array {
   return out;
 }
 
-/**
- * Whisper log-mel features for a prepared 8 s window.
- *
- * TS port of `WhisperFeatureExtractor._np_extract_fbank_features` (the
- * preprocessing smart-turn v3 runs before the ONNX graph): reflect-padded
- * centered STFT (n_fft 400, hop 160, periodic Hann), power spectrum,
- * Slaney mel projection, `log10` with a 1e-10 floor, clamp to `max - 8`,
- * scale `(x + 4) / 4`, drop the trailing frame.
- *
- * Returns a row-major Float32Array of shape `(80, 800)` — index
- * `[mel * 800 + frame]` — ready to wrap in a `[1, 80, 800]` ONNX tensor.
- * Yields to the event loop every 128 frames so a per-turn prediction
- * cannot starve inbound audio handling.
- * @internal — exported for tests.
- */
-export async function computeWhisperLogMelFeatures(
-  window: Float64Array,
-): Promise<Float32Array> {
+export async function computeWhisperLogMelFeatures(window: Float64Array): Promise<Float32Array> {
   if (window.length !== SMART_TURN_MAX_SAMPLES) {
-    throw new Error(
-      `expected ${SMART_TURN_MAX_SAMPLES} samples, got ${window.length}; ` +
-        'run prepareInputWindow() first',
-    );
+    throw new Error(`expected ${SMART_TURN_MAX_SAMPLES} samples, got ${window.length}; run prepareInputWindow() first`);
   }
 
-  const half = N_FFT / 2; // 200 — center padding
-  const paddedLen = SMART_TURN_MAX_SAMPLES + N_FFT; // reflect-pad both sides
-  const numBins = 1 + N_FFT / 2; // 201
+  const half = N_FFT / 2;
+  const paddedLen = SMART_TURN_MAX_SAMPLES + N_FFT;
+  const numBins = 1 + N_FFT / 2;
 
-  // Reflect padding (numpy `mode="reflect"`: edge sample not repeated).
   const padded = new Float64Array(paddedLen);
   for (let i = 0; i < half; i++) padded[i] = window[half - i];
   padded.set(window, half);
@@ -424,10 +306,8 @@ export async function computeWhisperLogMelFeatures(
 
   const hann = hannWindow();
   const filters = melFilterbank();
-  const totalFrames = 1 + Math.floor((paddedLen - N_FFT) / HOP_LENGTH); // 801
+  const totalFrames = 1 + Math.floor((paddedLen - N_FFT) / HOP_LENGTH);
 
-  // log-mel over the RETAINED frames only (Whisper drops the last frame
-  // BEFORE the dynamic-range clamp, so the max is computed on 800 frames).
   const logSpec = new Float64Array(N_MELS * N_FRAMES);
   const re = new Float64Array(N_FFT);
   const im = new Float64Array(N_FFT);
@@ -454,7 +334,6 @@ export async function computeWhisperLogMelFeatures(
       logSpec[m * N_FRAMES + t] = v;
       if (v > maxLog) maxLog = v;
     }
-    // Keep the event loop responsive — ~6 yields per 8 s window.
     if ((t & 127) === 127) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
@@ -468,69 +347,37 @@ export async function computeWhisperLogMelFeatures(
   return out;
 }
 
-/** int16 LE PCM bytes → smart-turn `input_features` data (80 × 800). @internal */
 export async function featuresFromPcm16(pcm16Window: Buffer): Promise<Float32Array> {
   const numSamples = Math.floor(pcm16Window.length / 2);
   const samples = new Float64Array(numSamples);
   for (let i = 0; i < numSamples; i++) {
-    // ÷32768 matches smart-turn / pipecat int16→float conversion. The
-    // exact scale is irrelevant after zero-mean/unit-variance
-    // normalization, but kept identical for parity with the reference.
     samples[i] = pcm16Window.readInt16LE(i * 2) / 32768;
   }
   return computeWhisperLogMelFeatures(prepareInputWindow(samples));
 }
 
-/**
- * Semantic end-of-utterance detector backed by smart-turn v3 (ONNX).
- *
- * Load via {@link SmartTurnDetector.load} (throws with actionable
- * instructions when the optional deps or the model file are missing) or
- * {@link SmartTurnDetector.maybeLoad} (warns once and resolves `undefined`
- * instead, so the agent degrades to plain VAD-silence endpointing rather
- * than crashing):
- *
- * ```ts
- * const detector = await SmartTurnDetector.load();   // PATTER_SMART_TURN_MODEL
- * // or: await SmartTurnDetector.load({ modelPath: '…/smart-turn-v3.0.onnx' });
- * // or: await SmartTurnDetector.maybeLoad();        // undefined when unprovisioned
- *
- * const agent = phone.agent({ ..., turnDetector: detector });
- * ```
- *
- * {@link predict} takes the most recent window of mono int16 LE PCM at
- * 16 kHz (up to 8 s — longer windows are truncated to the last 8 s,
- * shorter ones are left-padded) and returns the probability in `[0, 1]`
- * that the caller has finished their turn. The pipeline handler compares
- * it against {@link threshold} (default 0.5).
- *
- * The model is stateless (no streaming RNN state), so a single instance
- * may be shared across concurrent calls.
- */
 export class SmartTurnDetector implements TurnDetectorProvider {
   private closed = false;
+  private readonly turnSense: TurnSenseDetector;
+  private readonly telnyxEOS: TelnyxWav2Vec2EOS;
 
   private constructor(
-    private readonly runtime: OnnxRuntime,
+    private readonly runtime: OnnxRuntime | null,
     private session: OnnxInferenceSession | null,
     private readonly thresholdValue: number,
-  ) {}
+    options: SmartTurnDetectorOptions = {}
+  ) {
+    this.turnSense = new TurnSenseDetector({ modelPath: options.turnSensePath });
+    this.telnyxEOS = new TelnyxWav2Vec2EOS({ modelPath: options.telnyxEosPath });
+  }
 
-  /**
-   * Load the smart-turn v3 ONNX model and return a ready detector.
-   * Throws with download instructions when no model file is configured
-   * (see {@link SMART_TURN_MODEL_ENV_VAR}), and with install instructions
-   * when `onnxruntime-node` is missing.
-   */
   static async load(options: SmartTurnDetectorOptions = {}): Promise<SmartTurnDetector> {
     const threshold = options.threshold ?? DEFAULT_SMART_TURN_THRESHOLD;
     if (!(threshold >= 0 && threshold <= 1)) {
       throw new Error('threshold must be within [0.0, 1.0]');
     }
-    // Resolve the model path BEFORE touching onnxruntime so a missing
-    // model file surfaces the actionable download hint, not a native-dep
-    // resolution error.
-    const modelPath = resolveSmartTurnModelPath(options.modelPath);
+
+    const modelPath = await resolveSmartTurnModelPathAsync(options.modelPath);
     const runtime = await loadOnnxRuntime('SmartTurnDetector');
     const session = await runtime.InferenceSession.create(modelPath, {
       interOpNumThreads: 1,
@@ -539,36 +386,10 @@ export class SmartTurnDetector implements TurnDetectorProvider {
       graphOptimizationLevel: 'all',
       executionProviders: options.forceCpu === false ? undefined : ['cpu'],
     });
-    return new SmartTurnDetector(runtime, session, threshold);
+    return new SmartTurnDetector(runtime, session, threshold, options);
   }
 
-  /**
-   * Like {@link load}, but degrade instead of throw.
-   *
-   * Resolves to `undefined` — after a single clear warning — when semantic
-   * turn detection is not provisioned: the optional `onnxruntime-node`
-   * dependency is missing, no model file is configured, or the configured
-   * file cannot be loaded. Intended for deployments where the detector is
-   * a soft upgrade:
-   *
-   * ```ts
-   * const agent = phone.agent({
-   *   ...,
-   *   turnDetector: await SmartTurnDetector.maybeLoad(),
-   * });
-   * ```
-   *
-   * `turnDetector: undefined` keeps the plain VAD-silence endpointing, so
-   * the agent starts (and the call behaves) exactly as if the feature were
-   * never enabled — it never crashes the app.
-   *
-   * An out-of-range `threshold` still throws: that is a configuration bug,
-   * not a provisioning gap. Mirror of the Python
-   * `SmartTurnDetector.maybe_load`.
-   */
-  static async maybeLoad(
-    options: SmartTurnDetectorOptions = {},
-  ): Promise<SmartTurnDetector | undefined> {
+  static async maybeLoad(options: SmartTurnDetectorOptions = {}): Promise<SmartTurnDetector | undefined> {
     const threshold = options.threshold ?? DEFAULT_SMART_TURN_THRESHOLD;
     if (!(threshold >= 0 && threshold <= 1)) {
       throw new Error('threshold must be within [0.0, 1.0]');
@@ -578,94 +399,82 @@ export class SmartTurnDetector implements TurnDetectorProvider {
     } catch (err) {
       getLogger().warn(
         'Semantic turn detection unavailable — falling back to plain ' +
-          `VAD-silence endpointing: ${err instanceof Error ? err.message : String(err)}`,
+          `VAD-silence endpointing: ${err instanceof Error ? err.message : String(err)}`
       );
       return undefined;
     }
   }
 
-  /**
-   * Internal factory used by tests — bypasses onnxruntime-node loading.
-   * @internal
-   */
-  static fromOnnxSession(
-    runtime: OnnxRuntime,
-    session: OnnxInferenceSession,
-    options: { threshold?: number } = {},
-  ): SmartTurnDetector {
-    return new SmartTurnDetector(
-      runtime,
-      session,
-      options.threshold ?? DEFAULT_SMART_TURN_THRESHOLD,
-    );
+  static fromOnnxSession(runtime: OnnxRuntime, session: OnnxInferenceSession, options: { threshold?: number } = {}): SmartTurnDetector {
+    return new SmartTurnDetector(runtime, session, options.threshold ?? DEFAULT_SMART_TURN_THRESHOLD);
   }
 
-  /** Identifier of the underlying model (`smart-turn-v3`). */
   get model(): string {
     return 'smart-turn-v3';
   }
 
-  /** Identifier of the runtime backend (`ONNX`). */
   get provider(): string {
     return 'ONNX';
   }
 
-  /** Input sample rate the model expects (16 000 Hz). */
   get sampleRate(): number {
     return SMART_TURN_SAMPLE_RATE;
   }
 
-  /** Maximum audio context the model consumes per prediction (8 s). */
   get maxWindowSeconds(): number {
     return SMART_TURN_MAX_SECONDS;
   }
 
-  /** End-of-turn probability at/above which the turn is complete. */
   get threshold(): number {
     return this.thresholdValue;
   }
 
   /**
-   * End-of-turn probability for the given recent-audio window.
-   *
-   * @param pcm16Window Mono int16 little-endian PCM at 16 kHz — ideally
-   *   the full audio of the caller's current turn, up to 8 s (the
-   *   handler keeps a rolling 8 s buffer). Longer input is truncated to
-   *   the most recent 8 s; shorter input is left-padded with silence,
-   *   matching the reference preprocessing exactly.
-   * @param _transcript Ignored. Smart-turn v3 is audio-native — it scores
-   *   prosody, not text. Accepted only so the detector satisfies the
-   *   widened {@link TurnDetectorProvider.predict} contract shared with
-   *   text detectors like `NamoTurnDetector`.
-   * @returns Probability in `[0, 1]` that the turn is COMPLETE (the
-   *   graph applies the sigmoid internally). Returns 0 for an empty
-   *   window.
+   * Unified Dual-Gated Turn Detection:
+   * 1. If ONNX smart-turn session exists, runs ONNX session prediction on log-mel features.
+   * 2. Otherwise, runs TurnSense text heuristics + TelnyxWav2Vec2EOS 700ms audio tie-breaker in gray-zone!
    */
-  async predict(pcm16Window: Buffer, _transcript?: string): Promise<number> {
-    if (this.closed || this.session === null) {
+  async predict(pcm16Window: Buffer, transcript?: string): Promise<number> {
+    if (this.closed) {
       throw new Error('SmartTurnDetector is closed');
     }
-    if (pcm16Window.length < 2) {
+    if (pcm16Window.length < 2 && !transcript) {
       return 0;
     }
-    const features = await featuresFromPcm16(pcm16Window);
-    const { Tensor } = this.runtime;
-    const feeds = {
-      input_features: new Tensor('float32', features, [1, N_MELS, N_FRAMES]),
-    };
-    const results = await this.session.run(feeds);
-    const first = Object.values(results)[0] as OnnxTensor | undefined;
-    const data = first?.data as Float32Array | undefined;
-    const probability = data?.[0] ?? 0;
-    // Defensive clamp — the graph already emits a sigmoid in (0, 1).
-    return Math.min(1, Math.max(0, probability));
+
+    // 1. If ONNX session is loaded (smart-turn-v3.onnx), run feature extraction & model inference
+    if (this.session && this.runtime) {
+      const features = await featuresFromPcm16(pcm16Window);
+      const { Tensor } = this.runtime;
+      const feeds = { input_features: new Tensor('float32', features, [1, N_MELS, N_FRAMES]) };
+      const results = await this.session.run(feeds);
+      const first = Object.values(results)[0] as OnnxTensor | undefined;
+      const data = first?.data as Float32Array | undefined;
+      const probability = data?.[0] ?? 0;
+      return Math.min(1, Math.max(0, probability));
+    }
+
+    // 2. Dual-Gated Turn Detection (TurnSense Text Heuristics + Telnyx Wav2Vec2 EOS Audio Tie-Breaker)
+    const textScore = await this.turnSense.predict(pcm16Window, transcript ?? '');
+
+    // Fast-path: clear certainty
+    if (textScore >= 0.75) return 1.0;
+    if (textScore < 0.45) return 0.2;
+
+    // Gray-Zone Uncertainty (0.45 <= textScore < 0.75) -> Run Telnyx Wav2Vec2 EOS 700ms audio tie-breaker!
+    const eosScore = await this.telnyxEOS.predictEos(pcm16Window);
+    if (eosScore >= this.telnyxEOS.threshold) {
+      return 0.95;
+    }
+
+    return 0.35;
   }
 
-  /** Release the ONNX session. Idempotent. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    // onnxruntime-node sessions are garbage-collected; drop the ref.
+    await this.turnSense.close();
+    await this.telnyxEOS.close();
     this.session = null;
   }
 }

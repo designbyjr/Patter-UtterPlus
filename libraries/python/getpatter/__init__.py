@@ -95,6 +95,8 @@ from getpatter.services.text_transforms import (
 # :func:`getpatter.tools.tool_decorator.tool` at the top level, but that module
 # remains importable for users that already depend on the legacy dict shape.
 from getpatter._public_api import Tool, tool, guardrail
+from getpatter.utils import ContainerSlotManager, container_slot_manager
+
 
 # Flat aliases for the 4-line quickstart.
 from getpatter.carriers.twilio import Carrier as Twilio
@@ -136,6 +138,8 @@ from getpatter.tts.cartesia import TTS as CartesiaTTS
 from getpatter.tts.rime import TTS as RimeTTS
 from getpatter.tts.lmnt import TTS as LMNTTTS
 from getpatter.tts.inworld import TTS as InworldTTS
+from getpatter.providers.speech_emotion import SpeechEmotionDetector, EmotionPrediction
+
 from getpatter.tts.soniox import TTS as SonioxTTS
 from getpatter.tts.sarvam import TTS as SarvamTTS
 from getpatter.tts.xai import TTS as XaiTTS
@@ -218,6 +222,18 @@ def __getattr__(name):
         from getpatter.providers import smart_turn as _smart_turn
 
         return getattr(_smart_turn, name)
+    if name == "TenVAD":
+        from getpatter.providers.ten_vad import TenVAD as _TenVAD
+
+        return _TenVAD
+    if name == "TelnyxWav2Vec2EOS":
+        from getpatter.providers.telnyx_wav2vec2 import TelnyxWav2Vec2EOS as _TelnyxWav2Vec2EOS
+
+        return _TelnyxWav2Vec2EOS
+    if name == "DeepgramFluxSTT":
+        from getpatter.providers.deepgram_flux_stt import DeepgramFluxSTT as _DeepgramFluxSTT
+
+        return _DeepgramFluxSTT
     # NAMO Turn Detector v1 — text-based end-of-utterance (needs the
     # ``namo-turn-detector`` extra: numpy + onnxruntime + transformers, plus a
     # downloaded NAMO v1 ONNX model + tokenizer).
@@ -226,6 +242,7 @@ def __getattr__(name):
 
         return getattr(_namo, name)
     raise AttributeError(f"module 'getpatter' has no attribute {name!r}")
+
 
 
 # Observability — opt-in OTel tracing.

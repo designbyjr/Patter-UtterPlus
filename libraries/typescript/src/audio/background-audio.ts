@@ -47,17 +47,18 @@ export type BuiltinAudioClipName = (typeof BuiltinAudioClip)[keyof typeof Builti
 
 /** Resolve a bundled clip name to its absolute path on disk. */
 export function builtinClipPath(clip: BuiltinAudioClipName): string {
-  // Resolve relative to this compiled file's location so the path works in
-  // both CJS (``__dirname``) and ESM builds.  ``import.meta.url`` exists in
-  // ESM; CJS builds of this module fall back to ``__dirname``.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const meta: any = typeof import.meta !== 'undefined' ? import.meta : undefined;
-  const here =
-    meta?.url
-      ? path.dirname(fileURLToPath(meta.url as string))
-      : typeof __dirname !== 'undefined'
-        ? __dirname
-        : process.cwd();
+  let here: string;
+  if (typeof __dirname !== 'undefined') {
+    here = __dirname;
+  } else {
+    try {
+      // Dynamic evaluation prevents esbuild/tsup CJS warning for import.meta
+      const metaUrl = (new Function('return import.meta.url'))() as string;
+      here = path.dirname(fileURLToPath(metaUrl));
+    } catch {
+      here = process.cwd();
+    }
+  }
   return path.resolve(here, '..', 'resources', 'audio', clip);
 }
 

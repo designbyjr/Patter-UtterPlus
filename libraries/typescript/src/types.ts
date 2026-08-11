@@ -954,6 +954,11 @@ export interface AgentOptions {
    */
   readonly bargeInThresholdMs?: number;
   /**
+   * Threshold (ms) below which brief acoustic energy (coughs, short hums)
+   * is treated as backchannel noise and ignored during TTS playback. Default: 300.
+   */
+  readonly backchannelThresholdMs?: number;
+  /**
    * Opt-in barge-in confirmation strategies (pipeline mode). With the
    * default empty array the SDK falls back to the legacy
    * "interrupt immediately on VAD speech_start" behaviour. When at

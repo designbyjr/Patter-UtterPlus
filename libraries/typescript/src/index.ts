@@ -204,6 +204,9 @@ export { STT as SpeechmaticsSTT } from "./stt/speechmatics";
 export type { SpeechmaticsSTTOptions } from "./stt/speechmatics";
 export { STT as GeminiSTT } from "./stt/gemini";
 export type { GeminiSTTOptions } from "./stt/gemini";
+// Deepgram Flux — Cloudflare Workers AI (@cf/deepgram/flux) WebSocket streaming STT.
+export { STT as DeepgramFluxSTT } from "./stt/deepgram-flux";
+export type { DeepgramFluxSTTOptions } from "./stt/deepgram-flux";
 export {
   TurnDetectionMode as SpeechmaticsTurnDetectionMode,
   SpeechmaticsSampleRate,
@@ -294,6 +297,10 @@ export const litellm = Object.freeze({ LLM: LiteLLMLLMClass });
 // Voice Activity Detection (server-side) — Silero ONNX.
 export { SileroVAD } from "./providers/silero-vad";
 export type { SileroVADOptions, SileroSampleRate } from "./providers/silero-vad";
+// TenVAD — high-performance acoustic VAD with optional ONNX model inference.
+// Opt-in ONNX via PATTER_TENVAD_MODEL env var or { onnxFilePath } option.
+export { TenVAD, TENVAD_MODEL_ENV_VAR } from "./providers/ten-vad";
+export type { TenVADOptions } from "./providers/ten-vad";
 
 // Semantic turn detection (end-of-utterance) — pipecat-ai smart-turn v3,
 // ONNX. Opt-in via ``agent.turnDetector``; the model file is NOT bundled —
@@ -301,6 +308,10 @@ export type { SileroVADOptions, SileroSampleRate } from "./providers/silero-vad"
 // PATTER_SMART_TURN_MODEL (or pass ``modelPath``).
 export { SmartTurnDetector, SMART_TURN_MODEL_ENV_VAR } from "./providers/smart-turn";
 export type { SmartTurnDetectorOptions } from "./providers/smart-turn";
+// Telnyx Wav2Vec2 EOS — 700ms sliding PCM audio window classifier @ 100ms step.
+export { TelnyxWav2Vec2EOS } from "./providers/telnyx-wav2vec2";
+export type { TelnyxWav2Vec2EOSOptions } from "./providers/telnyx-wav2vec2";
+export { TurnDetector as TelnyxWav2Vec2EOSDetector } from "./turn-detector/telnyx-wav2vec2";
 
 // NAMO Turn Detector v1 (VideoSDK, Apache-2.0) — TEXT-based end-of-utterance,
 // an open clean-weights detector. Opt-in via ``agent.turnDetector``; the model
@@ -315,6 +326,11 @@ export type {
   NamoTurnDetectorOptions,
   NamoTokenizer,
 } from "./providers/namo-turn-detector";
+
+// TurnSense — hybrid text + audio turn completion classifier with optional ONNX.
+// Opt-in ONNX via PATTER_TURNSENSE_MODEL env var or { modelPath } option.
+export { TurnSenseDetector, TURNSENSE_MODEL_ENV_VAR } from "./providers/turn-sense";
+export type { TurnSenseOptions } from "./providers/turn-sense";
 
 // Noise-suppression audio filters (opt-in, plug into ``agent.audioFilter``).
 // DeepFilterNet — community ONNX, no license required.
@@ -371,6 +387,19 @@ export { CloudflareTunnel, Ngrok, Static as StaticTunnel } from "./tunnels";
 // Public API primitives.
 export { Tool, Guardrail, tool, guardrail } from "./public-api";
 export type { ToolOptions, GuardrailOptions, ToolHandler } from "./public-api";
+export { containerSlotManager, ContainerSlotManager } from "./utils/container-slot-manager";
+export type { ContainerSlotManagerOptions, CapacityStats } from "./utils/container-slot-manager";
+export { fetchModelFromR2, clearR2LoaderCache } from "./utils/r2-model-loader";
+export type { R2ModelLoaderOptions } from "./utils/r2-model-loader";
+export { warmContainerModels } from "./utils/container-model-warmup";
+export type { ContainerModelWarmupOptions, WarmupResult } from "./utils/container-model-warmup";
+export { PatterGrpcClient } from "./grpc-client";
+export type { GrpcWarmupOptions, GrpcWarmupResult, GrpcCapacityStats, GrpcInferenceEvent } from "./grpc-client";
+export { SpeechEmotionDetector } from "./providers/speech-emotion";
+export type { SpeechEmotionOptions, EmotionPrediction } from "./providers/speech-emotion";
+
+
+
 export {
   mulawToPcm16,
   pcm16ToMulaw,
@@ -539,3 +568,4 @@ export type {
   CallEvent,
   PatterEventType,
 } from "./observability";
+
