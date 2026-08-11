@@ -64,6 +64,10 @@ export interface ContainerSlotManagerOptions {
    * Default: CONTAINER_ID env var, or os.hostname().
    */
   readonly containerId?: string;
+  /**
+   * Optional callback to delegate incoming Telnyx WebSocket streams directly to Patter StreamHandler.
+   */
+  readonly onConnection?: (ws: WSWebSocket, callSessionId: string) => void;
 }
 
 export interface CapacityStats {
@@ -86,6 +90,7 @@ export class ContainerSlotManager {
   private readonly onHighWatermark?: (active: number, max: number) => void;
   private readonly cooldownMs: number;
   private readonly onCooldownComplete?: () => void;
+  private readonly onConnection?: (ws: WSWebSocket, callSessionId: string) => void;
   private highWatermarkFired = false;
   private isCoolingDownState = false;
   private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -101,6 +106,7 @@ export class ContainerSlotManager {
     this.highWatermarkRatio = opts.highWatermarkRatio ?? 0.80;
     this.cooldownMs = opts.cooldownMs ?? parseInt(process.env['CONTAINER_COOLDOWN_MS'] ?? '120000', 10);
     this.onCooldownComplete = opts.onCooldownComplete;
+    this.onConnection = opts.onConnection;
     this.containerId =
       opts.containerId ??
       process.env['CONTAINER_ID'] ??
@@ -328,11 +334,18 @@ export class ContainerSlotManager {
     });
 
     wss.on('connection', (ws: WSWebSocket & { callSessionId?: string }) => {
-      getLogger().info(`[PATTER] Container media stream connected (sessionId=${ws.callSessionId})`);
+      const sessionId = ws.callSessionId || `session-${Math.random().toString(36).substring(7)}`;
+      getLogger().info(`[PATTER] Container media stream connected (sessionId=${sessionId})`);
 
-      ws.on('message', (data) => {
-        ws.send(JSON.stringify({ event: 'media_frame_ack', size: data.toString().length }));
-      });
+      if (this.onConnection) {
+        // Delegate WebSocket connection directly to Patter StreamHandler
+        this.onConnection(ws, sessionId);
+      } else {
+        // Default stub echo handler
+        ws.on('message', (data) => {
+          ws.send(JSON.stringify({ event: 'media_frame_ack', size: data.toString().length }));
+        });
+      }
 
       ws.on('close', () => {
         if (ws.callSessionId) {
