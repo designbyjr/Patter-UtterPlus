@@ -3,20 +3,19 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Container definition — built from our C++ ONNX Dockerfile
+# Define the container image and instance hardware
 [[containers]]
 class_name = "PatterInferenceContainer"
 image = "./Dockerfile"
 instance_type = "standard-4"  # 4 vCPU, 12 GiB RAM, 20 GB disk
 max_instances = 10
 
-# Durable Object binding for the container
-[durable_objects]
-bindings = [
-  { name = "INFERENCE_CONTAINER", class_name = "PatterInferenceContainer" }
-]
+# Bind the container as a Durable Object
+[[durable_objects.bindings]]
+name = "INFERENCE_CONTAINER"
+class_name = "PatterInferenceContainer"
 
-# Migration tag for Durable Object
+# Run the migration for SQLite-backed Durable Object namespace
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PatterInferenceContainer"]
