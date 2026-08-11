@@ -36,6 +36,7 @@ calls. It ships **two SDKs with full parity**: Python (`pip install getpatter`,
 8. **NO Workers to route voice traffic.** Never route real-time carrier audio streams (WebSockets / Webhooks) through intermediate Worker scripts due to Worker CPU and wall-time execution limits. Use direct container ingress routes, Cloudflare Tunnels (`cloudflared`), or Cloudflare Load Balancer direct origins.
 9. **Use Cloudflare MCP for infrastructure operations.** Always leverage the installed Cloudflare Model Context Protocol (MCP) server for managing, querying, or inspecting Cloudflare infrastructure (Load Balancers, Workers, Containers, Workers KV, R2, DNS, Tunnels).
 10. **Terminology: "Actors" vs "Workers".** Refer to internal application processing units, container instances, or background engines as **Actors**. The term **Workers** refers strictly to Cloudflare's serverless infrastructure platform (Cloudflare Workers).
+11. **Actor Container Capacity Limits.** Container instance capacities for real-time voice handling are strictly bounded by hardware tier: `standard-3` (2 vCPU, 8 GiB RAM) handles a maximum of **2 concurrent calls**; `standard-4` (4 vCPU, 12 GiB RAM) handles a maximum of **4 concurrent calls**.
 
 ## Before opening a PR
 
