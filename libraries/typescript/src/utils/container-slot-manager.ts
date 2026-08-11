@@ -301,9 +301,9 @@ export class ContainerSlotManager {
 
     this.httpServer = http.createServer(app);
 
-    this.httpServer.listen(port, () => {
+    this.httpServer.listen(port, '0.0.0.0', () => {
       getLogger().info(
-        `[PATTER] ContainerSlotManager: capacity endpoint listening on :${port}`
+        `[PATTER] ContainerSlotManager: capacity endpoint listening on 0.0.0.0:${port}`
       );
     });
 
