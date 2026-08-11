@@ -68,6 +68,11 @@ export interface ContainerSlotManagerOptions {
    * Optional callback to delegate incoming Telnyx WebSocket streams directly to Patter StreamHandler.
    */
   readonly onConnection?: (ws: WSWebSocket, callSessionId: string) => void;
+  /**
+   * On-Demand Dynamic Push Callback for Cloudflare Load Balancer origin updates.
+   * Fired immediately (< 5ms) when active call slot allocation changes.
+   */
+  readonly onCapacityChanged?: (activeCalls: number, maxSlots: number, isSaturated: boolean) => void;
 }
 
 export interface CapacityStats {
@@ -91,6 +96,7 @@ export class ContainerSlotManager {
   private readonly cooldownMs: number;
   private readonly onCooldownComplete?: () => void;
   private readonly onConnection?: (ws: WSWebSocket, callSessionId: string) => void;
+  private readonly onCapacityChanged?: (active: number, max: number, isSaturated: boolean) => void;
   private highWatermarkFired = false;
   private isCoolingDownState = false;
   private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,6 +113,7 @@ export class ContainerSlotManager {
     this.cooldownMs = opts.cooldownMs ?? parseInt(process.env['CONTAINER_COOLDOWN_MS'] ?? '120000', 10);
     this.onCooldownComplete = opts.onCooldownComplete;
     this.onConnection = opts.onConnection;
+    this.onCapacityChanged = opts.onCapacityChanged;
     this.containerId =
       opts.containerId ??
       process.env['CONTAINER_ID'] ??
@@ -141,6 +148,7 @@ export class ContainerSlotManager {
 
     this.activeSessions.set(callSessionId, true);
     this.maybeFireHighWatermark();
+    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, this.activeSessions.size >= this.maxSlots);
     getLogger().debug(
       `[PATTER] ContainerSlotManager: +slot ${callSessionId} ` +
         `(${this.activeSessions.size}/${this.maxSlots})`
@@ -159,6 +167,7 @@ export class ContainerSlotManager {
     if (this.activeSessions.size / this.maxSlots < this.highWatermarkRatio) {
       this.highWatermarkFired = false;
     }
+    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, this.activeSessions.size >= this.maxSlots);
     getLogger().debug(
       `[PATTER] ContainerSlotManager: -slot ${callSessionId} ` +
         `(${this.activeSessions.size}/${this.maxSlots})`
