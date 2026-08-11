@@ -68,11 +68,12 @@
   },
   "dependencies": {
     "express": "^5.2.1",
+    "sharp": "^0.35.3",
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
     "@aws-sdk/client-s3": "^3.1107.0",
-    "@huggingface/transformers": "^3.0.0",
+    "@huggingface/transformers": "^4.2.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@mongodb-js/zstd": "^1.2.2",
     "@msgpack/msgpack": "^3.0.0",
