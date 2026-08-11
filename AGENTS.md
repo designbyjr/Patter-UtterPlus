@@ -35,6 +35,7 @@ calls. It ships **two SDKs with full parity**: Python (`pip install getpatter`,
    `print()` / bare `console.*` in library code.
 8. **NO Workers to route voice traffic.** Never route real-time carrier audio streams (WebSockets / Webhooks) through intermediate Worker scripts due to Worker CPU and wall-time execution limits. Use direct container ingress routes, Cloudflare Tunnels (`cloudflared`), or Cloudflare Load Balancer direct origins.
 9. **Use Cloudflare MCP for infrastructure operations.** Always leverage the installed Cloudflare Model Context Protocol (MCP) server for managing, querying, or inspecting Cloudflare infrastructure (Load Balancers, Workers, Containers, Workers KV, R2, DNS, Tunnels).
+10. **Terminology: "Actors" vs "Workers".** Refer to internal application processing units, container instances, or background engines as **Actors**. The term **Workers** refers strictly to Cloudflare's serverless infrastructure platform (Cloudflare Workers).
 
 ## Before opening a PR
 
