@@ -29,7 +29,7 @@ export class PatterInferenceContainer extends Container {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    return this.containerFetch(request);
+    return this.containerFetch(request, 8080);
   }
 }
 
