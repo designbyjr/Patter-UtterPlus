@@ -27,6 +27,10 @@ export class PatterInferenceContainer extends Container {
   override async onStop() {
     console.log("[Patter] C++ ONNX Inference Container sleeping (scale-to-zero)...");
   }
+
+  override async fetch(request: Request): Promise<Response> {
+    return this.containerFetch(request);
+  }
 }
 
 /**
