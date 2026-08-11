@@ -276,43 +276,11 @@ export default {
     const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
 
     if (isWebSocket) {
-      // Attempt direct container fetch for WebSocket upgrade
-      try {
-        const res = await targetContainer.fetch(request);
-        if (res.status === 101 || res.webSocket) {
-          return res;
-        }
-      } catch {
-        // Fallback to WebSocketPair proxy
-      }
-
-
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-      server.accept();
-
-      targetContainer.fetch(request).then((res) => {
-        if (res.webSocket) {
-          const containerWs = res.webSocket;
-          containerWs.accept();
-
-          server.addEventListener("message", (evt) => containerWs.send(evt.data));
-          containerWs.addEventListener("message", (evt) => server.send(evt.data));
-
-          server.addEventListener("close", () => containerWs.close());
-          containerWs.addEventListener("close", () => server.close());
-        }
-      }).catch(() => {
-        server.close(1011, "Container connection error");
-      });
-
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-      });
+      return targetContainer.fetch(request);
     }
 
     return targetContainer.fetch(request);
   },
 };
+
 

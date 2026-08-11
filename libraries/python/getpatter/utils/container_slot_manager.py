@@ -46,12 +46,16 @@ class ContainerSlotManager:
         container_id: Optional[str] = None,
     ) -> None:
         if max_slots is None:
-            max_slots = int(os.environ.get("MAX_CONTAINER_CALL_SLOTS", "15"))
+            env_tier = os.environ.get("INSTANCE_TYPE", "standard-4")
+            default_max = 2 if env_tier == "standard-3" else 4
+            max_slots = int(os.environ.get("MAX_CONTAINER_CALL_SLOTS", str(default_max)))
         self.max_slots = max_slots
         self.high_watermark_ratio = high_watermark_ratio
         self.cooldown_seconds = float(os.environ.get("CONTAINER_COOLDOWN_SECONDS", str(cooldown_seconds)))
         self.on_cooldown_complete = on_cooldown_complete
         self.container_id = container_id or os.environ.get("CONTAINER_ID") or socket.gethostname()
+        self.bind_ip = os.environ.get("CHANNEL_BIND_IP", "0.0.0.0")
+
         self.on_high_watermark = on_high_watermark
 
         self._active_sessions: Set[str] = set()

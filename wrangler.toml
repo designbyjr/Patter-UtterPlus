@@ -18,7 +18,8 @@ class_name = "PatterInferenceContainer"
 
 [[kv_namespaces]]
 binding = "PATTER_KV"
-id = "patter_container_pool_kv"
+id = "326b0ef931a2450b8175ecb11adede33"
+
 
 # Run the migration for SQLite-backed Durable Object namespace
 [[migrations]]

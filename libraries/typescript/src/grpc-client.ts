@@ -56,8 +56,11 @@ export class PatterGrpcClient {
   private clientInstance: any = null;
 
   constructor(target?: string) {
-    this.target = target ?? process.env['PATTER_GRPC_TARGET'] ?? 'unix:///tmp/patter-engine.sock';
+    const bindIp = process.env['CHANNEL_BIND_IP'];
+    const defaultTarget = bindIp ? `${bindIp}:50051` : 'unix:///tmp/patter-engine.sock';
+    this.target = target ?? process.env['PATTER_GRPC_TARGET'] ?? defaultTarget;
   }
+
 
   private async getClient(): Promise<any> {
     if (this.clientInstance) return this.clientInstance;
