@@ -31,7 +31,7 @@ export class PatterInferenceContainer extends Container {
 
 /**
  * Cloudflare Worker Router entry point.
- * Provides instant <10ms Edge health & capacity responses with zero cold-start delay.
+ * Provides Edge-Level Load Balancing & Slot Capacity Gating across N container DO instances.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -66,15 +66,13 @@ export default {
       });
     }
 
-    // 3. Fast Edge Capacity Check (< 10ms response time — zero RPC timeout wait)
+    // 3. Fast Edge Capacity Check (/capacity, /status)
     if (url.pathname === "/capacity" || url.pathname === "/status") {
       const isDeepCheck = url.searchParams.get("full") === "true";
 
-      // Instant Edge Capacity Mode (Default: < 10ms)
       if (!isDeepCheck) {
         let activeCallsCount = 0;
 
-        // If Workers KV is bound, count active call sessions instantly from KV index
         if (env.PATTER_KV) {
           try {
             const activeCallsList = await env.PATTER_KV.list({ prefix: "active_call:" });
@@ -116,7 +114,7 @@ export default {
         });
       }
 
-      // Deep Container Diagnostic Mode (pass ?full=true to force container RPC pings)
+      // Deep Container Diagnostic Mode (?full=true)
       try {
         const poolPromises = Array.from({ length: configuredPoolSize }, (_, i) => {
           const cId = `patter-pool-${i}`;
@@ -185,23 +183,71 @@ export default {
       }
     }
 
-    // 4. Smart Call Session Routing (/media)
+    // 4. Edge-Level Smart Load-Balancing & Capacity Gating (/media)
     const callSessionId = url.searchParams.get("call_session_id") || url.searchParams.get("CallSid") || "";
-    let poolIndex = 0;
+
+    // Track container slot allocations at the Edge
+    const containerSlotCounts = new Map<number, number>();
+    for (let i = 0; i < configuredPoolSize; i++) {
+      containerSlotCounts.set(i, 0);
+    }
+
+    // If Workers KV is active, index live session counts per container
+    if (env.PATTER_KV) {
+      try {
+        const activeSessions = await env.PATTER_KV.list({ prefix: "session_container:" });
+        for (const key of activeSessions.keys) {
+          const containerIdx = parseInt(key.name.split(":")[1] || "0", 10);
+          const current = containerSlotCounts.get(containerIdx) || 0;
+          containerSlotCounts.set(containerIdx, current + 1);
+        }
+      } catch {
+        // Fallback to round-robin
+      }
+    }
+
+    // Select container with available slots (activeCalls < maxSlots)
+    let selectedPoolIndex = -1;
 
     if (callSessionId) {
+      // Session hash pinning: try primary hashed container first
       let hash = 0;
       for (let i = 0; i < callSessionId.length; i++) {
         hash = (hash << 5) - hash + callSessionId.charCodeAt(i);
         hash |= 0;
       }
-      poolIndex = Math.abs(hash) % configuredPoolSize;
-    } else {
-      poolIndex = Math.floor(Math.random() * configuredPoolSize);
+      const primaryIndex = Math.abs(hash) % configuredPoolSize;
+      const primaryActive = containerSlotCounts.get(primaryIndex) || 0;
+
+      if (primaryActive < slotsPerContainer) {
+        selectedPoolIndex = primaryIndex;
+      }
     }
 
-    const targetContainerId = `patter-pool-${poolIndex}`;
+    // If primary hashed container is full, pick the container with the MOST available slots
+    if (selectedPoolIndex === -1) {
+      let minActive = slotsPerContainer;
+      for (let i = 0; i < configuredPoolSize; i++) {
+        const active = containerSlotCounts.get(i) || 0;
+        if (active < minActive) {
+          minActive = active;
+          selectedPoolIndex = i;
+        }
+      }
+    }
+
+    // Fallback round-robin if all report 0/unknown
+    if (selectedPoolIndex === -1) {
+      selectedPoolIndex = Math.floor(Math.random() * configuredPoolSize);
+    }
+
+    const targetContainerId = `patter-pool-${selectedPoolIndex}`;
     const targetContainer = getContainer(env.INFERENCE_CONTAINER, targetContainerId);
+
+    // Record session assignment at Edge KV for instant load balancing
+    if (env.PATTER_KV && callSessionId) {
+      void env.PATTER_KV.put(`session_container:${selectedPoolIndex}:${callSessionId}`, "1", { expirationTtl: 3600 });
+    }
 
     return targetContainer.fetch(request);
   },
