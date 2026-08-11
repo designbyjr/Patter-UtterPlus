@@ -1,6 +1,7 @@
 # Multi-stage production Dockerfile for Patter Voice Infrastructure on Cloudflare Containers
+# Explicitly targeting linux/amd64 architecture for Cloudflare Containers compatibility
 
-FROM node:22-slim AS builder
+FROM --platform=linux/amd64 node:22-slim AS builder
 WORKDIR /app
 
 COPY package*.json ./
@@ -10,7 +11,7 @@ RUN cd libraries/typescript && npm ci
 COPY . .
 RUN cd libraries/typescript && npm run build
 
-FROM node:22-slim AS runner
+FROM --platform=linux/amd64 node:22-slim AS runner
 WORKDIR /app
 
 # Install C++ ONNX runtime dependencies (libgomp1), zstd, and curl for health check
