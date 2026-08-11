@@ -55,9 +55,11 @@ await phone.serve({ agent, tunnel: true });
 | Inbound calls | `phone.serve({ agent })` | Answer calls as an AI |
 | Outbound calls + AMD | `phone.call({ to, machineDetection: true })` | Place calls with voicemail detection |
 | Tool calling | `agent({ tools: [tool(...)] })` | Agent calls external APIs mid-conversation |
-| Custom STT + TTS | `agent({ stt: new DeepgramSTT(), tts: new ElevenLabsTTS() })` | Bring your own voice providers |
+| Custom STT + TTS | `agent({ stt: new DeepgramFluxSTT(), tts: new FishAudioTTS() })` | Bring your own voice providers |
+| Ultra-Fast VAD | `agent({ vad: await TenVAD.load() })` | 0ms acoustic speech detection |
+| Smart Turn Detection | `agent({ turnDetector: await SmartTurnDetector.load() })` | Dual-gated TurnSense + Telnyx Wav2Vec2 tie-breaker |
 | Dynamic variables | `agent({ variables: {...} })` | Personalize prompts per caller |
-| Pluggable LLM | `agent({ llm: new AnthropicLLM() })` | 5 built-in providers: OpenAI, Anthropic, Groq, Cerebras, Google |
+| Pluggable LLM | `agent({ llm: new OpenAILLM() })` | Built-in providers: OpenAI, Anthropic, Groq, Cerebras, Google |
 | Custom LLM (any model) | `serve({ onMessage })` | Route to anything — local inference, internal gateways, etc. |
 | Call recording | `serve({ recording: true })` | Record all calls |
 | Call transfer | `transfer_call` (auto-injected) | Transfer to a human |
@@ -75,9 +77,9 @@ Every provider reads its credentials from the environment by default. Pass `apiK
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | `new Twilio()` carrier |
 | `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, `TELNYX_PUBLIC_KEY` (optional) | `new Telnyx()` carrier |
 | `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN` | `new Plivo()` carrier — Auth Token doubles as the V3 webhook signature key |
-| `OPENAI_API_KEY` | `OpenAIRealtime`, `WhisperSTT`, `OpenAITTS` |
+| `OPENAI_API_KEY` | `OpenAIRealtime`, `WhisperSTT`, `OpenAITTS`, `OpenAILLM` |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID` | `ElevenLabsConvAI`, `ElevenLabsTTS` |
-| `DEEPGRAM_API_KEY` | `DeepgramSTT` |
+| `DEEPGRAM_API_KEY` | `DeepgramSTT`, `DeepgramFluxSTT` |
 | `CARTESIA_API_KEY` | `CartesiaSTT`, `CartesiaTTS` |
 | `RIME_API_KEY` | `RimeTTS` |
 | `LMNT_API_KEY` | `LMNTTTS` |
@@ -130,8 +132,11 @@ new Patter({
 phone.agent({
   systemPrompt: string;
   engine?: OpenAIRealtime | ElevenLabsConvAI;        // default: new OpenAIRealtime()
-  stt?: STTProvider;                                 // e.g. new DeepgramSTT()
-  tts?: TTSProvider;                                 // e.g. new ElevenLabsTTS()
+  stt?: STTProvider;                                 // e.g. new DeepgramFluxSTT()
+  tts?: TTSProvider;                                 // e.g. new FishAudioTTS({ model: "s2.1-pro" })
+  vad?: TenVAD;                                      // e.g. await TenVAD.load()
+  turnDetector?: TurnDetectorProvider;               // e.g. await SmartTurnDetector.load()
+  llm?: LLMProvider;                                 // e.g. new OpenAILLM()
   voice?: string;
   model?: string;
   language?: string;
@@ -142,7 +147,7 @@ phone.agent({
 })
 ```
 
-Pass `engine` for end-to-end mode, `stt` + `tts` for pipeline mode. Both arguments may take plain adapter instances (e.g. `new DeepgramSTT()`) that read their API key from the environment.
+Pass `engine` for end-to-end mode, `stt` + `tts` (+ optional `vad` & `turnDetector`) for pipeline mode.
 
 ### `phone.serve()`
 
@@ -237,18 +242,31 @@ const agent = phone.agent({
 await phone.serve({ agent, tunnel: true });
 ```
 
-### Pipeline mode — pick STT, LLM, TTS independently
+### Pipeline mode — Deepgram Flux STT + OpenAILLM + Fish Audio TTS + SmartTurn
 
 ```typescript
-import { Patter, Twilio, DeepgramSTT, AnthropicLLM, ElevenLabsTTS } from "getpatter";
+import {
+  Patter,
+  Twilio,
+  DeepgramFluxSTT,
+  OpenAILLM,
+  FishAudioTTS,
+  FishAudioModel,
+  TenVAD,
+  SmartTurnDetector,
+} from "getpatter";
 
 const phone = new Patter({ carrier: new Twilio(), phoneNumber: "+15550001234" });
+
 const agent = phone.agent({
-  stt: new DeepgramSTT(),                         // reads DEEPGRAM_API_KEY
-  llm: new AnthropicLLM(),                        // reads ANTHROPIC_API_KEY
-  tts: new ElevenLabsTTS({ voiceId: "sarah" }),   // reads ELEVENLABS_API_KEY
-  systemPrompt: "You are a helpful voice assistant.",
+  vad: await TenVAD.load(),
+  stt: new DeepgramFluxSTT(),                                          // Cloudflare Workers AI @cf/deepgram/flux
+  llm: new OpenAILLM({ model: "gpt-4o-mini" }),
+  turnDetector: await SmartTurnDetector.load(),                         // Dual-Gated TurnSense + Telnyx Wav2Vec2 EOS
+  tts: new FishAudioTTS({ model: FishAudioModel.S2_1_PRO }),           // Fish Audio S2.1 Pro TTS
+  systemPrompt: "You are a helpful voice receptionist for Patter.",
 });
+
 await phone.serve({ agent, tunnel: true });
 ```
 

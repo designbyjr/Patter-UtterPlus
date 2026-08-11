@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
+.cache/
+.wrangler/
 build/
 .eggs/
 *.egg
@@ -41,3 +43,5 @@ skills-lock.json
 *.tsbuildinfo
 coverage/
 *.tgz
+cerebras.pdf
+.antigravity/mcp.json

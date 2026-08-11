@@ -2,6 +2,13 @@
 
 ### Added
 
+- **`ContainerSlotManager`**: In-process multi-call slot manager and `/capacity` + `/health` HTTP endpoint server for Cloudflare Container deployments, enforcing `MAX_CONTAINER_CALL_SLOTS`, high-watermark scaling triggers, and a 2-minute (`120s`) `DRAINING_COOLDOWN` state after calls drop to 0 to allow outstanding LLM tool executions and API polling to complete cleanly in both Python and TypeScript SDKs.
+- **`SpeechEmotionDetector`**: Real-time speech emotion recognition provider (`onnx-community/wav2vec2-base-Speech_Emotion_Recognition-ONNX`) predicting 7 speaker emotions (`happy`, `sad`, `angry`, `neutral`, `fear`, `disgust`, `surprise`) with INT8 quantization in Python and TypeScript SDKs.
+- **`TelnyxWav2Vec2EOS`**: 700ms sliding PCM audio window end-of-speech classifier provider (`telnyx_wav2vec2_eos_int8.onnx`) with sigmoid scoring and trailing pitch decay fallback in Python and TypeScript.
+- **`DeepgramFluxSTT`**: Streaming STT provider for Cloudflare Workers AI `@cf/deepgram/flux` WebSocket endpoints with `StartOfTurn`, `Update`, `EagerEndOfTurn`, and `EndOfTurn` event mapping.
+- **`TenVAD`**: High-performance ONNX voice activity detector provider with Silero loading, frame evaluation, and auto-fallback.
+
+
 - **Fish Audio voice provider suite** — TTS (S2.1-Pro / S2-Pro) and ASR land in
   both SDKs, wired end-to-end with real pricing. One `FISH_AUDIO_API_KEY`
   covers both directions of the call:
