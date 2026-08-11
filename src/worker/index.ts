@@ -265,11 +265,6 @@ export default {
       }
     }
 
-    // Fallback round-robin if all report 0/unknown
-    if (selectedPoolIndex === -1) {
-      selectedPoolIndex = Math.floor(Math.random() * configuredPoolSize);
-    }
-
     const targetContainerId = `patter-pool-${selectedPoolIndex}`;
     const targetContainer = getContainer(env.INFERENCE_CONTAINER, targetContainerId);
 
@@ -278,6 +273,46 @@ export default {
       void env.PATTER_KV.put(`session_container:${selectedPoolIndex}:${callSessionId}`, "1", { expirationTtl: 3600 });
     }
 
+    const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+
+    if (isWebSocket) {
+      // Attempt direct container fetch for WebSocket upgrade
+      try {
+        const res = await targetContainer.fetch(request);
+        if (res.status === 101 || res.webSocket) {
+          return res;
+        }
+      } catch {
+        // Fallback to WebSocketPair proxy
+      }
+
+
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      server.accept();
+
+      targetContainer.fetch(request).then((res) => {
+        if (res.webSocket) {
+          const containerWs = res.webSocket;
+          containerWs.accept();
+
+          server.addEventListener("message", (evt) => containerWs.send(evt.data));
+          containerWs.addEventListener("message", (evt) => server.send(evt.data));
+
+          server.addEventListener("close", () => containerWs.close());
+          containerWs.addEventListener("close", () => server.close());
+        }
+      }).catch(() => {
+        server.close(1011, "Container connection error");
+      });
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      });
+    }
+
     return targetContainer.fetch(request);
   },
 };
+
