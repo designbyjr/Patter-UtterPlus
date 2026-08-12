@@ -2,7 +2,9 @@
 
 ### Added
 
+- **`PatterTemporalService` & `gRPC Telemetry`**: Opt-in Temporal Cloud service integration (`initTemporalClient` / `init_temporal_client`) and typed `EventEmitter` events (`onnxTelemetry`, `capacityChanged`, `slotAcquired`, `slotReleased`) for microsecond C++ ONNX model execution tracking and 100% call workflow state persistence in both Python and TypeScript SDKs.
 - **`MultiChannelDirectContainerIngress`**: Multi-channel direct container ingress architecture with proactive Cloudflare API v4 origin weight pushing (`weight: 0` when 4/4 slots full), `PATTER_KV` Durable Object Actor lifecycle sync (`onStart`/`onStop`), and strict 1-to-1 non-overlapping Docker port mapping (8080–8083).
+
 
 
 - **`ContainerSlotManager`**: In-process multi-call slot manager and `/capacity` + `/health` HTTP endpoint server for Cloudflare Container deployments, enforcing `MAX_CONTAINER_CALL_SLOTS`, high-watermark scaling triggers, and a 2-minute (`120s`) `DRAINING_COOLDOWN` state after calls drop to 0 to allow outstanding LLM tool executions and API polling to complete cleanly in both Python and TypeScript SDKs.

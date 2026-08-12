@@ -47,8 +47,16 @@ export interface GrpcInferenceEvent {
   readonly vadScore: number;
   readonly eosScore: number;
   readonly isUserSpeaking: boolean;
-  readonly isTurnComplete: boolean;
   readonly blockNumber: number;
+}
+
+export interface GrpcTelemetryEvent {
+
+  readonly callSessionId: string;
+  readonly cppInferenceUs: number;
+  readonly nodeRoundtripMs: number;
+  readonly channelPort: number;
+  readonly status: string;
 }
 
 export class PatterGrpcClient {
@@ -60,6 +68,7 @@ export class PatterGrpcClient {
     const defaultTarget = bindIp ? `${bindIp}:50051` : 'unix:///tmp/patter-engine.sock';
     this.target = target ?? process.env['PATTER_GRPC_TARGET'] ?? defaultTarget;
   }
+
 
 
   private async getClient(): Promise<any> {
