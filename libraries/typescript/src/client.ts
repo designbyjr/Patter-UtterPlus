@@ -66,6 +66,7 @@ import {
 import { previousVersion, daysSinceInstallBucket, isFirstRun } from "./telemetry/install-id";
 import { VERSION } from "./version";
 import { SpeechEvents } from "./_speech-events";
+import { initTracing } from "./observability";
 import type {
   ConversationStateSnapshot,
   SpeechEventCallback,
@@ -502,6 +503,9 @@ export class Patter {
       sdkVersion: VERSION,
       flag: options.telemetry,
     });
+
+    // Auto-initialize OpenTelemetry tracing when PATTER_OTEL_ENABLED=1
+    initTracing();
 
     if (!options.phoneNumber) {
       this.recordConfigIncomplete('carrier_credentials');

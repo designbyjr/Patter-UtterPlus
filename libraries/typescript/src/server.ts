@@ -55,6 +55,7 @@ import type {
 import type { CallMetrics, CostBreakdown } from './metrics';
 import { CallLogger, resolveLogRoot } from './services/call-log';
 import { LocalCallRecorder } from './audio/call-recorder';
+import { patterCallScope, startSpan, SPAN_WEBHOOK } from './observability';
 
 /** Resolved configuration consumed by `EmbeddedServer` (carrier credentials, webhook URL, etc.). */
 export interface LocalConfig {
@@ -2146,16 +2147,35 @@ export class EmbeddedServer {
       }
       const caller = (req.body.From as string) || '';
       const callee = (req.body.To as string) || '';
-      const rawStreamUrl = `wss://${this.config.webhookUrl}/ws/stream/${callSid}`;
-      const xmlStreamUrl = xmlEscape(rawStreamUrl);
-      // SECURITY (#204): mint a per-call token bound to the CallSid. Twilio
-      // strips the query string from <Stream url=...>, so the token rides as a
-      // <Parameter> and arrives in start.customParameters on the WS 'start'
-      // frame. This webhook is signature-validated above, so only a legitimate
-      // carrier ever receives the token.
-      const streamToken = this.streamTokens.mint(callSid);
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${xmlStreamUrl}"><Parameter name="caller" value="${xmlEscape(caller)}"/><Parameter name="callee" value="${xmlEscape(callee)}"/><Parameter name="patter_stream_token" value="${xmlEscape(streamToken)}"/></Stream></Connect></Response>`;
-      res.type('text/xml').send(twiml);
+      const callerIp = req.ip || (req.headers['x-forwarded-for'] as string) || (req.headers['cf-connecting-ip'] as string) || '';
+      const callerHash = caller ? crypto.createHash('sha256').update(caller).digest('hex') : '';
+      const calleeHash = callee ? crypto.createHash('sha256').update(callee).digest('hex') : '';
+      const port = (this.server?.address() as { port?: number })?.port ?? 8080;
+
+      const webhookSpan = startSpan(SPAN_WEBHOOK, {
+        'patter.caller.ip': callerIp,
+        'patter.caller.hash': callerHash,
+        'patter.callee.hash': calleeHash,
+        'patter.call.sid': callSid,
+        'patter.call.carrier': 'twilio',
+        'patter.websocket.port': port,
+        'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+      });
+
+      try {
+        const rawStreamUrl = `wss://${this.config.webhookUrl}/ws/stream/${callSid}`;
+        const xmlStreamUrl = xmlEscape(rawStreamUrl);
+        // SECURITY (#204): mint a per-call token bound to the CallSid. Twilio
+        // strips the query string from <Stream url=...>, so the token rides as a
+        // <Parameter> and arrives in start.customParameters on the WS 'start'
+        // frame. This webhook is signature-validated above, so only a legitimate
+        // carrier ever receives the token.
+        const streamToken = this.streamTokens.mint(callSid);
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Connect><Stream url="${xmlStreamUrl}"><Parameter name="caller" value="${xmlEscape(caller)}"/><Parameter name="callee" value="${xmlEscape(callee)}"/><Parameter name="patter_stream_token" value="${xmlEscape(streamToken)}"/></Stream></Connect></Response>`;
+        res.type('text/xml').send(twiml);
+      } finally {
+        webhookSpan.end();
+      }
     });
 
     app.post('/webhooks/telnyx/voice', async (req, res) => {
@@ -3274,38 +3294,34 @@ export class EmbeddedServer {
           return;
         }
         const event = data.event;
+        const callSid = data.start?.callSid ?? handler.callId ?? '';
 
-        if (event === 'start') {
-          handler.setStreamSid(data.streamSid ?? '');
-          const callSid = data.start?.callSid ?? '';
-          const customParameters = data.start?.customParameters ?? {};
-          // SECURITY (#204): validate the per-call token BEFORE opening any
-          // provider session (the billable part). The token was minted by the
-          // signature-validated /webhooks/twilio/voice handler (inbound) or the
-          // outbound call() dial and delivered as a <Parameter>. Strip it from
-          // customParameters so it never reaches the prompt/template vars, logs,
-          // or metadata.json.
-          const { patter_stream_token: presentedToken, ...cleanParameters } = customParameters;
-          if (!this.authorizeStream(ws, callSid, presentedToken, 'Twilio')) return;
-          if (callSid) this.activeCallIds.set(ws, callSid);
-          await handler.handleCallStart(callSid, cleanParameters);
-        } else if (event === 'media') {
-          const payload = data.media?.payload ?? '';
-          // ``await`` keeps a rejection inside the outer try/catch — un-awaited
-          // it becomes an unhandled rejection that kills the process (Node 15+).
-          await handler.handleAudio(Buffer.from(payload, 'base64'));
-        } else if (event === 'mark') {
-          // Twilio confirms playback of a previously sent audio chunk.
-          // Forward the mark name so barge-in heuristics can compare it
-          // against the latest sent mark. Mirrors Python's
-          // ``twilio_handler.on_mark`` propagation.
-          const markName = String(data.mark?.name ?? '');
-          if (markName) await handler.onMark(markName);
-        } else if (event === 'dtmf') {
-          const digit = data.dtmf?.digit ?? '';
-          await handler.handleDtmf(digit);
-        } else if (event === 'stop') {
-          await handler.handleStop();
+        const dispatchEvent = async (): Promise<void> => {
+          if (event === 'start') {
+            handler.setStreamSid(data.streamSid ?? '');
+            const customParameters = data.start?.customParameters ?? {};
+            const { patter_stream_token: presentedToken, ...cleanParameters } = customParameters;
+            if (!this.authorizeStream(ws, callSid, presentedToken, 'Twilio')) return;
+            if (callSid) this.activeCallIds.set(ws, callSid);
+            await handler.handleCallStart(callSid, cleanParameters);
+          } else if (event === 'media') {
+            const payload = data.media?.payload ?? '';
+            await handler.handleAudio(Buffer.from(payload, 'base64'));
+          } else if (event === 'mark') {
+            const markName = String(data.mark?.name ?? '');
+            if (markName) await handler.onMark(markName);
+          } else if (event === 'dtmf') {
+            const digit = data.dtmf?.digit ?? '';
+            await handler.handleDtmf(digit);
+          } else if (event === 'stop') {
+            await handler.handleStop();
+          }
+        };
+
+        if (callSid) {
+          await patterCallScope({ callId: callSid }, dispatchEvent);
+        } else {
+          await dispatchEvent();
         }
       } catch (err) {
         getLogger().error('Stream handler error:', err);

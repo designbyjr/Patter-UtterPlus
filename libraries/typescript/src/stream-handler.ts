@@ -52,6 +52,7 @@ import {
 } from './skills';
 import type { ProviderPricing } from './pricing';
 import { SentenceChunker } from './sentence-chunker';
+import * as crypto from 'node:crypto';
 import { PipelineHookExecutor } from './pipeline-hooks';
 import { InputProcessingChain } from './services/input-chain';
 import { EventBus } from './observability/event-bus';
@@ -60,7 +61,9 @@ import {
   SPAN_BARGEIN,
   SPAN_ENDPOINT,
   SPAN_LLM,
+  SPAN_CALL,
   startSpan,
+  type Span,
 } from './observability/tracing';
 
 type AIAdapter = OpenAIRealtimeAdapter | ElevenLabsConvAIAdapter | GeminiLiveAdapter | GeminiCascadeAdapter;
@@ -766,7 +769,7 @@ export class StreamHandler {
 
   // Mutable call state
   private streamSid = '';
-  private callId = '';
+  public callId = '';
   private adapter: AIAdapter | null = null;
   private stt: STTAdapter | null = null;
   private tts: TTSAdapter | null = null;
@@ -2182,6 +2185,7 @@ export class StreamHandler {
   private readonly history: ReturnType<typeof createHistoryManager>;
   private readonly metricsAcc: CallMetricsAccumulator;
   private readonly _eventBus: EventBus;
+  private rootCallSpan: Span | null = null;
 
   constructor(deps: StreamHandlerDeps, ws: WSWebSocket, caller: string, callee: string) {
     this.deps = deps;
@@ -2518,6 +2522,15 @@ export class StreamHandler {
       call_id: callId,
       caller: this.caller,
       callee: this.callee,
+    });
+
+    const callerHash = this.caller ? crypto.createHash('sha256').update(this.caller).digest('hex') : '';
+    const calleeHash = this.callee ? crypto.createHash('sha256').update(this.callee).digest('hex') : '';
+    this.rootCallSpan = startSpan(SPAN_CALL, {
+      'patter.call.id': callId,
+      'patter.caller.hash': callerHash,
+      'patter.callee.hash': calleeHash,
+      'patter.call.carrier': this.deps.bridge.telephonyProvider,
     });
 
     // Safety: auto-hangup after 1 hour to prevent runaway billing
@@ -7796,6 +7809,18 @@ export class StreamHandler {
       callEndData,
       finalMetrics as unknown as Record<string, unknown>,
     );
+
+    if (this.rootCallSpan) {
+      try {
+        this.rootCallSpan.setAttribute('patter.call.duration_seconds', finalMetrics.duration_seconds);
+        this.rootCallSpan.setAttribute('patter.call.total_cost', cost);
+        this.rootCallSpan.setAttribute('patter.call.turns_count', finalMetrics.turns.length);
+        this.rootCallSpan.end();
+      } catch {
+        /* ignore */
+      }
+      this.rootCallSpan = null;
+    }
     // Notify standalone dashboard (if running)
     try {
       const { notifyDashboard } = await import('./dashboard/persistence');

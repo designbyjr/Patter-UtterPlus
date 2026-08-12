@@ -29,6 +29,7 @@ export const SPAN_TTS = 'getpatter.tts';
 export const SPAN_TOOL = 'getpatter.tool';
 export const SPAN_ENDPOINT = 'getpatter.endpoint';
 export const SPAN_BARGEIN = 'getpatter.bargein';
+export const SPAN_WEBHOOK = 'getpatter.webhook';
 
 /**
  * Minimal span surface area — subset of the OTel ``Span`` API the Patter SDK

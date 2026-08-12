@@ -17,6 +17,7 @@ export {
   SPAN_TOOL,
   SPAN_ENDPOINT,
   SPAN_BARGEIN,
+  SPAN_WEBHOOK,
   ENV_FLAG,
   SERVICE_NAME,
 } from './tracing';
