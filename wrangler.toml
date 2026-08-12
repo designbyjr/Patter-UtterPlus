@@ -3,6 +3,10 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-08-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+routes = [
+  { pattern = "media.unitedbypositives.com", custom_domain = true }
+]
+
 
 # Define the container image and instance hardware
 [[containers]]

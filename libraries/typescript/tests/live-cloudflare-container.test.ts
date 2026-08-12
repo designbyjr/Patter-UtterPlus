@@ -15,10 +15,14 @@
 import { describe, it, expect } from 'vitest';
 import WebSocket from 'ws';
 
-const LIVE_BASE_URL = process.env.LIVE_WORKER_URL || 'https://patter-voice-agent.saipenflow.workers.dev';
+const LIVE_BASE_URL = process.env.LIVE_WORKER_URL || 'https://media.unitedbypositives.com';
 const LIVE_WS_URL = LIVE_BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
-describe('Live Cloudflare Container Direct Ingress Multi-Call Test Suite', () => {
+
+const isLiveTestEnabled = Boolean(process.env.LIVE_CONTAINER_TEST || process.env.LIVE_WORKER_URL);
+
+describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Multi-Call Test Suite', () => {
+
   it('1. GET /health responds in < 500ms (verifying container readiness)', async () => {
     const startTime = Date.now();
     const res = await fetch(`${LIVE_BASE_URL}/health`);
