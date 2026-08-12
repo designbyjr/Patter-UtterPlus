@@ -353,7 +353,8 @@ export class ContainerSlotManager {
     this.httpServer.on('upgrade', (request, socket, head) => {
       const host = request.headers.host || 'localhost';
       const url = new URL(request.url ?? '', `http://${host}`);
-      if (url.pathname === '/media') {
+      if (url.pathname !== '/health' && url.pathname !== '/capacity') {
+
         const callSessionId = url.searchParams.get('call_session_id') || 
                              (request.headers['x-call-id'] as string) || 
                              `session-${Math.random().toString(36).substring(7)}`;
