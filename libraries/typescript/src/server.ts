@@ -2531,29 +2531,46 @@ export class EmbeddedServer {
     app.post('/webhooks/plivo/voice', (req, res) => {
       if (!validatePlivoRequest(req, res)) return;
       const body = (req.body ?? {}) as Record<string, string>;
-      // Plivo posts CallUUID + From/To on the answer_url for inbound AND
-      // answered-outbound calls — the same route serves both.
       const callUuid = body['CallUUID'] ?? '';
       const caller = body['From'] ?? '';
       const callee = body['To'] ?? '';
-      // API-originated calls answer with BOTH ids: re-key wait promises /
-      // AMD callbacks / prewarm slots from request_uuid → CallUUID.
-      const requestUuid = body['RequestUUID'] ?? '';
-      if (requestUuid && callUuid) this.aliasCallId(requestUuid, callUuid);
-      const qs = `?caller=${encodeURIComponent(caller)}&callee=${encodeURIComponent(callee)}`;
-      const streamUrl = `wss://${this.config.webhookUrl}/ws/plivo/stream/${callUuid || 'outbound'}${qs}`;
-      // SECURITY (#204): Plivo carries custom metadata via extra_headers (the
-      // same channel as X-PH-caller/callee), echoed back on the WS 'start'
-      // frame. Mint the per-call token here on the V3-signature-validated
-      // webhook (inbound AND answered-outbound share this route) and deliver it
-      // as X-Patter-Stream-Token.
-      const streamToken = this.streamTokens.mint(callUuid || 'outbound');
-      const xml = PlivoAdapter.generateStreamXml(streamUrl, 'audio/x-mulaw;rate=8000', {
-        'X-PH-caller': caller,
-        'X-PH-callee': callee,
-        'X-Patter-Stream-Token': streamToken,
+      const callerIp = req.ip || (req.headers['x-forwarded-for'] as string) || (req.headers['cf-connecting-ip'] as string) || '';
+      const callerHash = caller ? crypto.createHash('sha256').update(caller).digest('hex') : '';
+      const calleeHash = callee ? crypto.createHash('sha256').update(callee).digest('hex') : '';
+      const port = (this.server?.address() as { port?: number })?.port ?? 8080;
+
+      const webhookSpan = startSpan(SPAN_WEBHOOK, {
+        'patter.caller.ip': callerIp,
+        'patter.caller.hash': callerHash,
+        'patter.callee.hash': calleeHash,
+        'patter.call.sid': callUuid,
+        'patter.call.carrier': 'plivo',
+        'patter.websocket.port': port,
+        'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
       });
-      res.type('text/xml').send(xml);
+
+      try {
+        // API-originated calls answer with BOTH ids: re-key wait promises /
+        // AMD callbacks / prewarm slots from request_uuid → CallUUID.
+        const requestUuid = body['RequestUUID'] ?? '';
+        if (requestUuid && callUuid) this.aliasCallId(requestUuid, callUuid);
+        const qs = `?caller=${encodeURIComponent(caller)}&callee=${encodeURIComponent(callee)}`;
+        const streamUrl = `wss://${this.config.webhookUrl}/ws/plivo/stream/${callUuid || 'outbound'}${qs}`;
+        // SECURITY (#204): Plivo carries custom metadata via extra_headers (the
+        // same channel as X-PH-caller/callee), echoed back on the WS 'start'
+        // frame. Mint the per-call token here on the V3-signature-validated
+        // webhook (inbound AND answered-outbound share this route) and deliver it
+        // as X-Patter-Stream-Token.
+        const streamToken = this.streamTokens.mint(callUuid || 'outbound');
+        const xml = PlivoAdapter.generateStreamXml(streamUrl, 'audio/x-mulaw;rate=8000', {
+          'X-PH-caller': caller,
+          'X-PH-callee': callee,
+          'X-Patter-Stream-Token': streamToken,
+        });
+        res.type('text/xml').send(xml);
+      } finally {
+        try { webhookSpan.end(); } catch { /* swallow */ }
+      }
     });
 
     app.post('/webhooks/plivo/status', (req, res) => {
