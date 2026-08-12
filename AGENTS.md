@@ -37,6 +37,12 @@ calls. It ships **two SDKs with full parity**: Python (`pip install getpatter`,
 9. **Use Cloudflare MCP for infrastructure operations.** Always leverage the installed Cloudflare Model Context Protocol (MCP) server for managing, querying, or inspecting Cloudflare infrastructure (Load Balancers, Workers, Containers, Workers KV, R2, DNS, Tunnels).
 10. **Terminology: "Actors" vs "Workers".** Refer to internal application processing units, container instances, or background engines as **Actors**. The term **Workers** refers strictly to Cloudflare's serverless infrastructure platform (Cloudflare Workers).
 11. **Actor Container Capacity Limits.** Container instance capacities for real-time voice handling are strictly bounded by hardware tier: `standard-3` (2 vCPU, 8 GiB RAM) handles a maximum of **2 concurrent calls**; `standard-4` (4 vCPU, 12 GiB RAM) handles a maximum of **4 concurrent calls**.
+12. **Container Build Verification.** Before executing live integration/capacity tests against Cloudflare container deployments, always verify that the deployed container image rollout matches the latest commit hash on GitHub `main`.
+13. **Mac Local Dev vs Cloudflare Linux Environment.** Local development runs on macOS. Local macOS architecture (ARM64/Virtualization) differs from Cloudflare Edge Linux (`x86_64`). Avoid local Docker daemon builds for production deployments.
+14. **No `--containers-rollout=none` or Local Wrangler Container Builds.** Never execute `wrangler deploy --containers-rollout=none` or trigger local Docker container builds via Wrangler. All container images and Worker releases MUST be built and rolled out 100% in the cloud via Cloudflare's automated GitHub Integration upon `git push origin main`.
+
+
+
 
 ## Before opening a PR
 
