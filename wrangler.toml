@@ -28,6 +28,11 @@ class_name = "PatterInferenceContainer"
 binding = "PATTER_KV"
 id = "326b0ef931a2450b8175ecb11adede33"
 
+[[kv_namespaces]]
+binding = "voiceagents"
+id = "990a275e0c1749c59b530b8c219b8b8d"
+
+
 
 # Run the migration for SQLite-backed Durable Object namespace
 [[migrations]]
