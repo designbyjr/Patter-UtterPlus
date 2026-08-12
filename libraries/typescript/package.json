@@ -77,6 +77,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@mongodb-js/zstd": "^1.2.2",
     "@msgpack/msgpack": "^3.0.0",
+    "@temporalio/client": "^1.22.0",
     "cloudflared": "^0.7.1",
     "node-cron": "^4.0.0",
     "onnxruntime-node": "~1.18.0"
