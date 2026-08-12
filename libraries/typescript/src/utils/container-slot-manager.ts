@@ -27,6 +27,12 @@ import express from 'express';
 
 import { WebSocketServer, WebSocket as WSWebSocket } from 'ws';
 import { getLogger } from '../logger';
+import {
+  startSpan,
+  SPAN_SLOT_ACQUIRE,
+  SPAN_SLOT_RELEASE,
+  SPAN_CLOUDFLARE_PUSH,
+} from '../observability';
 
 export interface ContainerSlotManagerOptions {
   /**
@@ -139,7 +145,7 @@ export class ContainerSlotManager {
   }
 
   /** Default background Cloudflare Load Balancer origin weight push (< 5ms) */
-  private async defaultCloudflareCapacityPush(_activeCalls: number, _maxSlots: number, isSaturated: boolean): Promise<void> {
+  private async defaultCloudflareCapacityPush(activeCalls: number, maxSlots: number, isSaturated: boolean): Promise<void> {
 
     const apiToken = process.env['CLOUDFLARE_API_TOKEN'];
     const accountId = process.env['CLOUDFLARE_ACCOUNT_ID'] ?? '27e89563673d4bcd83625e2e12948bd4';
@@ -147,10 +153,24 @@ export class ContainerSlotManager {
 
     if (!apiToken || !poolId) return;
 
+    const weight = isSaturated ? 0 : 1;
+    const cfSpan = startSpan(SPAN_CLOUDFLARE_PUSH, {
+      'patter.cloudflare.account_id': accountId,
+      'patter.cloudflare.pool_id': poolId,
+      'patter.cloudflare.origin_name': this.containerId,
+      'patter.cloudflare.origin_weight': weight,
+      'patter.container.is_saturated': isSaturated,
+      'patter.container.active_calls': activeCalls,
+      'patter.container.max_slots': maxSlots,
+      'patter.container.available_slots': maxSlots - activeCalls,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+      'patter.websocket.port': parseInt(process.env['CAPACITY_HTTP_PORT'] ?? '8080', 10),
+      'patter.grpc.port': 50051,
+    });
+
     try {
-      const weight = isSaturated ? 0 : 1;
       const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/load_balancers/pools/${poolId}`;
-      await fetch(url, {
+      const res = await fetch(url, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${apiToken}`,
@@ -160,8 +180,12 @@ export class ContainerSlotManager {
           origins: [{ name: this.containerId, weight, enabled: true }],
         }),
       });
-    } catch {
+      cfSpan.setAttribute('patter.cloudflare.http_status', res.status);
+    } catch (err) {
+      cfSpan.recordException(err);
       // Ignore background push errors in offline test environments
+    } finally {
+      try { cfSpan.end(); } catch { /* swallow */ }
     }
   }
 
@@ -172,6 +196,16 @@ export class ContainerSlotManager {
   acquire(callSessionId: string): boolean {
     if (this.activeSessions.has(callSessionId)) return true;
     if (this.activeSessions.size >= this.maxSlots) {
+      const rejectSpan = startSpan(SPAN_SLOT_ACQUIRE, {
+        'patter.call.id': callSessionId,
+        'patter.container.id': this.containerId,
+        'patter.container.active_calls': this.activeSessions.size,
+        'patter.container.max_slots': this.maxSlots,
+        'patter.slot.accepted': false,
+        'patter.container.is_saturated': true,
+        'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+      });
+      try { rejectSpan.end(); } catch { /* swallow */ }
       getLogger().warn(
         `[PATTER] ContainerSlotManager: at capacity (${this.activeSessions.size}/${this.maxSlots}), ` +
           `rejecting ${callSessionId}`
@@ -184,6 +218,18 @@ export class ContainerSlotManager {
     this.activeSessions.set(callSessionId, true);
     this.maybeFireHighWatermark();
     const isSaturated = this.activeSessions.size >= this.maxSlots;
+
+    const acquireSpan = startSpan(SPAN_SLOT_ACQUIRE, {
+      'patter.call.id': callSessionId,
+      'patter.container.id': this.containerId,
+      'patter.container.active_calls': this.activeSessions.size,
+      'patter.container.max_slots': this.maxSlots,
+      'patter.slot.accepted': true,
+      'patter.container.is_saturated': isSaturated,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+    });
+    try { acquireSpan.end(); } catch { /* swallow */ }
+
     this.events.emit('slotAcquired', { callSessionId, activeCalls: this.activeSessions.size, maxSlots: this.maxSlots });
     this.events.emit('capacityChanged', { activeCalls: this.activeSessions.size, maxSlots: this.maxSlots, isSaturated });
     this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, isSaturated);
@@ -206,6 +252,17 @@ export class ContainerSlotManager {
       this.highWatermarkFired = false;
     }
     const isSaturated = this.activeSessions.size >= this.maxSlots;
+
+    const releaseSpan = startSpan(SPAN_SLOT_RELEASE, {
+      'patter.call.id': callSessionId,
+      'patter.container.id': this.containerId,
+      'patter.container.active_calls': this.activeSessions.size,
+      'patter.container.max_slots': this.maxSlots,
+      'patter.container.is_saturated': isSaturated,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+    });
+    try { releaseSpan.end(); } catch { /* swallow */ }
+
     this.events.emit('slotReleased', { callSessionId, activeCalls: this.activeSessions.size, maxSlots: this.maxSlots });
     this.events.emit('capacityChanged', { activeCalls: this.activeSessions.size, maxSlots: this.maxSlots, isSaturated });
     this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, isSaturated);
