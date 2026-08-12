@@ -22,7 +22,9 @@
 
 import * as http from 'node:http';
 import * as os from 'node:os';
+import { EventEmitter } from 'node:events';
 import express from 'express';
+
 import { WebSocketServer, WebSocket as WSWebSocket } from 'ws';
 import { getLogger } from '../logger';
 
@@ -88,7 +90,9 @@ export interface CapacityStats {
 }
 
 export class ContainerSlotManager {
+  public readonly events = new EventEmitter();
   private readonly activeSessions = new Map<string, true>();
+
   readonly maxSlots: number;
   private readonly highWatermarkRatio: number;
   readonly containerId: string;
@@ -179,7 +183,10 @@ export class ContainerSlotManager {
 
     this.activeSessions.set(callSessionId, true);
     this.maybeFireHighWatermark();
-    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, this.activeSessions.size >= this.maxSlots);
+    const isSaturated = this.activeSessions.size >= this.maxSlots;
+    this.events.emit('slotAcquired', { callSessionId, activeCalls: this.activeSessions.size, maxSlots: this.maxSlots });
+    this.events.emit('capacityChanged', { activeCalls: this.activeSessions.size, maxSlots: this.maxSlots, isSaturated });
+    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, isSaturated);
     getLogger().debug(
       `[PATTER] ContainerSlotManager: +slot ${callSessionId} ` +
         `(${this.activeSessions.size}/${this.maxSlots})`
@@ -198,7 +205,11 @@ export class ContainerSlotManager {
     if (this.activeSessions.size / this.maxSlots < this.highWatermarkRatio) {
       this.highWatermarkFired = false;
     }
-    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, this.activeSessions.size >= this.maxSlots);
+    const isSaturated = this.activeSessions.size >= this.maxSlots;
+    this.events.emit('slotReleased', { callSessionId, activeCalls: this.activeSessions.size, maxSlots: this.maxSlots });
+    this.events.emit('capacityChanged', { activeCalls: this.activeSessions.size, maxSlots: this.maxSlots, isSaturated });
+    this.onCapacityChanged?.(this.activeSessions.size, this.maxSlots, isSaturated);
+
     getLogger().debug(
       `[PATTER] ContainerSlotManager: -slot ${callSessionId} ` +
         `(${this.activeSessions.size}/${this.maxSlots})`
