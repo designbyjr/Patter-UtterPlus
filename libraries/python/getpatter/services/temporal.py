@@ -4,7 +4,19 @@ import os
 import logging
 from typing import Optional, Dict, Any
 
+import re
+
 logger = logging.getLogger("getpatter")
+
+
+def format_temporal_address(container_id: str, port: int) -> str:
+    """Converts raw container IDs and ports into clean, human-readable Temporal labels.
+    Example: 'patter-pool-0', 8081 -> 'Container-1 # Port 8081'
+    """
+    match = re.search(r"\d+", container_id)
+    pool_num = int(match.group(0)) + 1 if match else 1
+    return f"Container-{pool_num} # Port {port}"
+
 
 
 class PatterTemporalService:

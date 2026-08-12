@@ -18,7 +18,20 @@ export interface PatterCallWorkflowParams {
   readonly callSessionId: string;
   readonly phoneNumber: string;
   readonly carrier: string;
+  readonly containerId?: string;
+  readonly port?: number;
 }
+
+/**
+ * Converts raw container IDs and ports into clean, human-readable Temporal labels.
+ * Example: "patter-pool-0", 8081 -> "Container-1 # Port 8081"
+ */
+export function formatTemporalAddress(containerId: string, port: number): string {
+  const poolMatch = containerId.match(/\d+/);
+  const poolNum = poolMatch ? Number(poolMatch[0]) + 1 : 1;
+  return `Container-${poolNum} # Port ${port}`;
+}
+
 
 export interface PatterCallTurnSignal {
   readonly speaker: 'user' | 'assistant' | 'system';
