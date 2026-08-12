@@ -97,51 +97,67 @@ export default {
 
     // 3. Fast Edge Capacity Check (/capacity, /status)
     if (url.pathname === "/capacity" || url.pathname === "/status") {
-      const isDeepCheck = url.searchParams.get("full") === "true";
+      const containerSlotCounts = new Map<number, number>();
+      for (let i = 0; i < configuredPoolSize; i++) {
+        containerSlotCounts.set(i, 0);
+      }
 
-      if (!isDeepCheck) {
-        let activeCallsCount = 0;
-
-        if (env.PATTER_KV) {
-          try {
-            const activeCallsList = await env.PATTER_KV.list({ prefix: "active_call:" });
-            activeCallsCount = activeCallsList.keys.length;
-          } catch {
-            activeCallsCount = 0;
+      if (env.PATTER_KV) {
+        try {
+          const activeSessions = await env.PATTER_KV.list({ prefix: "session_container:" });
+          for (const key of activeSessions.keys) {
+            const parts = key.name.split(":");
+            if (parts.length >= 2) {
+              const cIdx = parseInt(parts[1], 10);
+              if (!isNaN(cIdx)) {
+                const cur = containerSlotCounts.get(cIdx) || 0;
+                containerSlotCounts.set(cIdx, cur + 1);
+              }
+            }
           }
+        } catch {
+          // Fallback to empty map
         }
+      }
 
-        const totalMaxSlots = configuredPoolSize * slotsPerContainer;
-        const totalAvailableSlots = Math.max(0, totalMaxSlots - activeCallsCount);
-
-        const instances = Array.from({ length: configuredPoolSize }, (_, i) => ({
+      let totalActiveCalls = 0;
+      const instances = Array.from({ length: configuredPoolSize }, (_, i) => {
+        const active = containerSlotCounts.get(i) || 0;
+        totalActiveCalls += active;
+        const avail = Math.max(0, slotsPerContainer - active);
+        return {
           containerId: `patter-pool-${i}`,
-          status: "ready",
+          status: active >= slotsPerContainer ? "saturated" : "ready",
           stats: {
             maxSlots: slotsPerContainer,
-            activeCalls: 0,
-            availableSlots: slotsPerContainer,
+            activeCalls: active,
+            availableSlots: avail,
           },
-        }));
+        };
+      });
 
-        return new Response(JSON.stringify({
-          status: "healthy",
-          timestamp: new Date().toISOString(),
-          mode: "edge-fast",
-          poolSize: configuredPoolSize,
-          aggregatedCapacity: {
-            totalMaxSlots,
-            totalActiveCalls: activeCallsCount,
-            totalAvailableSlots,
-          },
-          instances,
-        }), {
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-          },
-        });
-      }
+      const totalMaxSlots = configuredPoolSize * slotsPerContainer;
+      const totalAvailableSlots = Math.max(0, totalMaxSlots - totalActiveCalls);
+
+      return new Response(JSON.stringify({
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        mode: "edge-kv",
+        poolSize: configuredPoolSize,
+        aggregatedCapacity: {
+          totalMaxSlots,
+          totalActiveCalls,
+          totalAvailableSlots,
+        },
+        instances,
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      });
+    }
 
       // Deep Container Diagnostic Mode (?full=true)
       try {
@@ -290,10 +306,17 @@ export default {
           containerWs.addEventListener("message", (evt) => server.send(evt.data));
           server.addEventListener("close", () => {
             try { containerWs.close(); } catch {}
+            if (env.PATTER_KV && callSessionId) {
+              void env.PATTER_KV.delete(`session_container:${selectedPoolIndex}:${callSessionId}`);
+            }
           });
           containerWs.addEventListener("close", () => {
             try { server.close(); } catch {}
+            if (env.PATTER_KV && callSessionId) {
+              void env.PATTER_KV.delete(`session_container:${selectedPoolIndex}:${callSessionId}`);
+            }
           });
+
         }
       }).catch(() => {
         try { server.close(1011, "Container connection error"); } catch {}
