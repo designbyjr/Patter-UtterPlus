@@ -26,11 +26,12 @@ class_name = "PatterInferenceContainer"
 
 [[kv_namespaces]]
 binding = "PATTER_KV"
-id = "326b0ef931a2450b8175ecb11adede33"
+id = "990a275e0c1749c59b530b8c219b8b8d"
 
 [[kv_namespaces]]
 binding = "voiceagents"
 id = "990a275e0c1749c59b530b8c219b8b8d"
+
 
 
 
