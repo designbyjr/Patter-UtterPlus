@@ -216,10 +216,11 @@ export default {
     const targetContainerId = `patter-pool-${selectedPoolIndex}`;
     const targetContainer = getContainer(env.INFERENCE_CONTAINER, targetContainerId);
 
-    // Record session assignment at Edge KV for instant load balancing
+    // Record session assignment at Edge KV for instant load balancing (60s auto-expiry TTL)
     if (env.PATTER_KV && callSessionId) {
-      void env.PATTER_KV.put(`session_container:${selectedPoolIndex}:${callSessionId}`, "1", { expirationTtl: 3600 });
+      void env.PATTER_KV.put(`session_container:${selectedPoolIndex}:${callSessionId}`, "1", { expirationTtl: 60 });
     }
+
 
     const isWebSocket = request.headers.get("Upgrade")?.toLowerCase() === "websocket";
 
