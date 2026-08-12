@@ -264,10 +264,11 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
       });
     });
 
-    // Query /capacity endpoint to inspect container pool distribution
+    // Step C: Query /capacity endpoint WHILE ALL 5 CALLS ARE STILL ACTIVE & OPEN!
+    console.log('📊 Fetching GET /capacity WHILE ALL 5 CALLS ARE ACTIVE...');
     const capRes = await fetch(`${LIVE_BASE_URL}/capacity`);
     const capData = (await capRes.json()) as Record<string, unknown>;
-    console.log('📊 Container Pool Elastic Spillover Stats:', JSON.stringify(capData, null, 2));
+    console.log('📊 LIVE STEP 6 CONTAINER CAPACITY SNAPSHOT (5 Active Calls):', JSON.stringify(capData, null, 2));
 
     // Clean up active connections
     for (const ws of clients) {
@@ -277,8 +278,54 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
     }
 
     expect(isConnectedToSecondPool).toBe(true);
+    expect(capRes.status).toBe(200);
   }, 35000);
+
+  it('6. Step-by-Step Capacity Snapshot: Verify Step 5 (4 calls on Pool 0) vs Step 6 (5th call on Pool 1)', async () => {
+    const clients: WebSocket[] = [];
+
+    // Step 5 Verification: Saturate patter-pool-0 with 4 open calls
+    console.log('⚡ [Step 5] Opening 4 active calls on Pool 0...');
+    for (let i = 0; i < 4; i++) {
+      const ws = new WebSocket(`${LIVE_WS_URL}/?call_session_id=step5:session-${i + 1}-${Date.now()}`);
+      clients.push(ws);
+      await new Promise<void>((r) => {
+        const t = setTimeout(r, 2000);
+        ws.on('open', () => { clearTimeout(t); r(); });
+        ws.on('error', () => { clearTimeout(t); r(); });
+      });
+    }
+
+    const step5Res = await fetch(`${LIVE_BASE_URL}/capacity`);
+    const step5Data = (await step5Res.json()) as Record<string, unknown>;
+    console.log('📌 [Step 5 Capacity Snapshot - Pool 0 Saturated (4 Calls)]:', JSON.stringify(step5Data, null, 2));
+
+    // Step 6 Verification: Connect 5th call to trigger pool 1 spillover
+    console.log('🔄 [Step 6] Connecting 5th call to trigger Pool 1 spillover...');
+    const ws5 = new WebSocket(`${LIVE_WS_URL}/?call_session_id=step6:session-5-spillover-${Date.now()}`);
+    clients.push(ws5);
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, 3000);
+      ws5.on('open', () => { clearTimeout(t); r(); });
+      ws5.on('error', () => { clearTimeout(t); r(); });
+    });
+
+    const step6Res = await fetch(`${LIVE_BASE_URL}/capacity`);
+    const step6Data = (await step6Res.json()) as Record<string, unknown>;
+    console.log('📌 [Step 6 Capacity Snapshot - 5th Call Spilled to Pool 1 (5 Total Calls)]:', JSON.stringify(step6Data, null, 2));
+
+    // Clean up
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close();
+      }
+    }
+
+    expect(step5Res.status).toBe(200);
+    expect(step6Res.status).toBe(200);
+  }, 40000);
 });
+
 
 
 
