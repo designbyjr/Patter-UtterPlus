@@ -38,6 +38,8 @@ sdk/
 .agents/
 .crush/
 .goose/
+temporal/
+
 skills-lock.json
 # TypeScript build / coverage / pack artifacts
 *.tsbuildinfo
