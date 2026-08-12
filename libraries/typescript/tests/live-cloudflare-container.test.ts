@@ -54,7 +54,8 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
         const callControlId = `v3:telnyx-call-ctrl-call-${index + 1}-${Date.now()}`;
         const callSessionId = `v3:telnyx-session-call-${index + 1}-${Date.now()}`;
 
-        const wsUrl = `${LIVE_WS_URL}/media?call_session_id=${callSessionId}`;
+        const wsUrl = `${LIVE_WS_URL}/?call_session_id=${callSessionId}`;
+
         const startTime = Date.now();
 
         const ws = new WebSocket(wsUrl, {
@@ -109,7 +110,8 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
       return new Promise<boolean>((resolve) => {
         const callControlId = `v4:telnyx-ctrl-${index + 1}-${Date.now()}`;
         const callSessionId = `v4:telnyx-session-${index + 1}-${Date.now()}`;
-        const wsUrl = `${LIVE_WS_URL}/media?call_session_id=${callSessionId}`;
+        const wsUrl = `${LIVE_WS_URL}/?call_session_id=${callSessionId}`;
+
 
         const ws = new WebSocket(wsUrl, {
           headers: { Upgrade: 'websocket', 'x-call-id': callControlId },
@@ -145,7 +147,8 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
     // Hold 4 calls open to saturate
     for (let i = 0; i < 4; i++) {
       const callSessionId = `sat:session-${i + 1}-${Date.now()}`;
-      const ws = new WebSocket(`${LIVE_WS_URL}/media?call_session_id=${callSessionId}`);
+      const ws = new WebSocket(`${LIVE_WS_URL}/?call_session_id=${callSessionId}`);
+
       clients.push(ws);
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(resolve, 3000);
@@ -165,7 +168,8 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
     let is503Rejected = false;
 
     await new Promise<void>((resolve) => {
-      const ws5 = new WebSocket(`${LIVE_WS_URL}/media?call_session_id=${call5SessionId}`);
+      const ws5 = new WebSocket(`${LIVE_WS_URL}/?call_session_id=${call5SessionId}`);
+
 
       const timeout = setTimeout(resolve, 5000);
 
