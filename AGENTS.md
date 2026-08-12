@@ -40,6 +40,8 @@ calls. It ships **two SDKs with full parity**: Python (`pip install getpatter`,
 12. **Container Build Verification.** Before executing live integration/capacity tests against Cloudflare container deployments, always verify that the deployed container image rollout matches the latest commit hash on GitHub `main`.
 13. **Mac Local Dev vs Cloudflare Linux Environment.** Local development runs on macOS. Local macOS architecture (ARM64/Virtualization) differs from Cloudflare Edge Linux (`x86_64`). Avoid local Docker daemon builds for production deployments.
 14. **No `--containers-rollout=none` or Local Wrangler Container Builds.** Never execute `wrangler deploy --containers-rollout=none` or trigger local Docker container builds via Wrangler. All container images and Worker releases MUST be built and rolled out 100% in the cloud via Cloudflare's automated GitHub Integration upon `git push origin main`.
+15. **Independent Temporal Deployment & Container Isolation.** The Temporal Server & UI infrastructure is 100% decoupled from `Patter-UtterPlus`. It maintains its own dedicated GitHub repository (`designbyjr/Patter-Temporal`), its own independent GitHub Actions CI/CD deployment pipeline, and executes in its own separate isolated container instance. Never route Temporal UI or gRPC traffic through the `Patter-UtterPlus` main Worker or `wrangler.toml`.
+
 
 
 

@@ -53,13 +53,10 @@ export class PatterInferenceContainer extends Container {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.hostname.startsWith("temporal") || url.pathname.startsWith("/temporal-ui") || request.headers.get("x-target-port") === "28233") {
-      return this.containerFetch(request, 28233);
-    }
     return this.containerFetch(request, 8080);
   }
 }
+
 
 
 
@@ -75,14 +72,9 @@ export default {
     const configuredPoolSize = parseInt(env.CONTAINER_POOL_SIZE || "3", 10);
     const slotsPerContainer = parseInt(env.MAX_CONTAINER_CALL_SLOTS || "4", 10);
 
-    // 0. Temporal Web UI domain routing (temporal.unitedbypositives.com) -> patter-pool-0:28233
-    if (url.hostname.startsWith("temporal")) {
-      const container = getContainer(env.INFERENCE_CONTAINER, "patter-pool-0");
-      return container.fetch(request);
-    }
-
     // 1. Direct container targeting via query param (e.g. ?containerId=patter-pool-1)
     const requestedContainerId = url.searchParams.get("containerId");
+
 
     if (requestedContainerId) {
       const container = getContainer(env.INFERENCE_CONTAINER, requestedContainerId);
