@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getLogger } from '../logger';
 import { fetchModelFromR2 } from '../utils/r2-model-loader';
+import { startSpan, SPAN_ONNX_INFERENCE } from '../observability';
 
 import type { TurnDetectorProvider } from '../types';
 import { TurnSenseDetector } from './turn-sense';
@@ -444,14 +445,29 @@ export class SmartTurnDetector implements TurnDetectorProvider {
 
     // 1. If ONNX session is loaded (smart-turn-v3.onnx), run feature extraction & model inference
     if (this.session && this.runtime) {
-      const features = await featuresFromPcm16(pcm16Window);
-      const { Tensor } = this.runtime;
-      const feeds = { input_features: new Tensor('float32', features, [1, N_MELS, N_FRAMES]) };
-      const results = await this.session.run(feeds);
-      const first = Object.values(results)[0] as OnnxTensor | undefined;
-      const data = first?.data as Float32Array | undefined;
-      const probability = data?.[0] ?? 0;
-      return Math.min(1, Math.max(0, probability));
+      const startMs = Date.now();
+      const span = startSpan(SPAN_ONNX_INFERENCE, {
+        'patter.onnx.model_name': 'smart_turn_v3',
+        'patter.onnx.sample_rate': SMART_TURN_SAMPLE_RATE,
+      });
+      try {
+        const features = await featuresFromPcm16(pcm16Window);
+        const { Tensor } = this.runtime;
+        const feeds = { input_features: new Tensor('float32', features, [1, N_MELS, N_FRAMES]) };
+        const results = await this.session.run(feeds);
+        const first = Object.values(results)[0] as OnnxTensor | undefined;
+        const data = first?.data as Float32Array | undefined;
+        const probability = data?.[0] ?? 0;
+        const finalProb = Math.min(1, Math.max(0, probability));
+        span.setAttribute('patter.eos.score', finalProb);
+        span.setAttribute('patter.onnx.inference_ms', Date.now() - startMs);
+        return finalProb;
+      } catch (err) {
+        span.recordException(err as Error);
+        throw err;
+      } finally {
+        try { span.end(); } catch { /* swallow */ }
+      }
     }
 
     // 2. Dual-Gated Turn Detection (TurnSense Text Heuristics + Telnyx Wav2Vec2 EOS Audio Tie-Breaker)

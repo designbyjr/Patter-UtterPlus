@@ -35,6 +35,8 @@ export const SPAN_SLOT_RELEASE = 'getpatter.slot.release';
 export const SPAN_CLOUDFLARE_PUSH = 'getpatter.cloudflare.push';
 export const SPAN_GRPC = 'getpatter.grpc';
 export const SPAN_GRPC_STREAM = 'getpatter.grpc.stream';
+export const SPAN_ONNX_INIT = 'getpatter.onnx.init';
+export const SPAN_ONNX_INFERENCE = 'getpatter.onnx.inference';
 
 /**
  * Minimal span surface area — subset of the OTel ``Span`` API the Patter SDK

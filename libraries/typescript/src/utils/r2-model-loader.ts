@@ -14,6 +14,7 @@ import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import { Readable } from 'node:stream';
 import { getLogger } from '../logger';
+import { startSpan, SPAN_ONNX_INIT } from '../observability';
 
 export interface R2ModelLoaderOptions {
   readonly r2Endpoint?: string;
@@ -185,64 +186,80 @@ export async function fetchModelFromR2(opts: R2ModelLoaderOptions): Promise<stri
     const timeoutMs = opts.timeoutMs ?? 10_000;
     const shards = Array.from(opts.shardKeys);
 
-    getLogger().info(`[PATTER] R2ModelLoader: downloading ${shards.length} shard(s) for "${opts.modelKey}"`);
+    const initSpan = startSpan(SPAN_ONNX_INIT, {
+      'patter.onnx.model_key': opts.modelKey,
+      'patter.onnx.shard_count': shards.length,
+      'patter.onnx.bucket': bucket,
+    });
 
-    const workerEndpoint = opts.workerEndpoint ?? process.env['PATTER_R2_WORKER_URL'];
-    let s3: unknown = null;
-    let GetObjectCommand: any = null;
+    try {
+      getLogger().info(`[PATTER] R2ModelLoader: downloading ${shards.length} shard(s) for "${opts.modelKey}"`);
 
-    if (!workerEndpoint) {
-      const deps = await loadS3Dependencies(opts);
-      s3 = deps.s3;
-      GetObjectCommand = deps.GetObjectCommand;
-    } else {
-      getLogger().info(`[PATTER] R2ModelLoader: using Cloudflare Worker R2 outbound binding at ${workerEndpoint}`);
-    }
+      const workerEndpoint = opts.workerEndpoint ?? process.env['PATTER_R2_WORKER_URL'];
+      let s3: unknown = null;
+      let GetObjectCommand: any = null;
 
-    const results: Buffer[] = new Array(shards.length);
-    let index = 0;
-
-    async function worker(): Promise<void> {
-      while (true) {
-        const i = index++;
-        if (i >= shards.length) return;
-        results[i] = await downloadShard(s3, GetObjectCommand, bucket!, shards[i], timeoutMs, workerEndpoint);
+      if (!workerEndpoint) {
+        const deps = await loadS3Dependencies(opts);
+        s3 = deps.s3;
+        GetObjectCommand = deps.GetObjectCommand;
+      } else {
+        getLogger().info(`[PATTER] R2ModelLoader: using Cloudflare Worker R2 outbound binding at ${workerEndpoint}`);
       }
-    }
 
-    await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, () => worker()));
+      const results: Buffer[] = new Array(shards.length);
+      let index = 0;
 
-    const assembled = Buffer.concat(results);
-    getLogger().info(`[PATTER] R2ModelLoader: assembled ${assembled.length} bytes in ${Date.now() - startMs}ms`);
-
-    const decompress = await loadZstd();
-    const decompressed = await decompress(assembled);
-
-    if (opts.expectedSha256) {
-      const actual = crypto.createHash('sha256').update(decompressed).digest('hex');
-      if (actual !== opts.expectedSha256) {
-        throw new Error(
-          `[PATTER] R2ModelLoader: SHA-256 integrity check failed for "${opts.modelKey}". Expected ${opts.expectedSha256}, got ${actual}.`
-        );
+      async function worker(): Promise<void> {
+        while (true) {
+          const i = index++;
+          if (i >= shards.length) return;
+          results[i] = await downloadShard(s3, GetObjectCommand, bucket!, shards[i], timeoutMs, workerEndpoint);
+        }
       }
-    }
 
-    const scratchDir = path.join(TMP_DIR, 'scratch');
-    await fs.promises.mkdir(scratchDir, { recursive: true });
-    await fs.promises.mkdir(TMP_DIR, { recursive: true });
+      await Promise.all(Array.from({ length: Math.min(concurrency, shards.length) }, () => worker()));
 
-    const scratchPath = path.join(scratchDir, `${opts.modelKey}.tmp`);
-    const outPath = path.join(TMP_DIR, `${opts.modelKey}.onnx`);
+      const assembled = Buffer.concat(results);
+      getLogger().info(`[PATTER] R2ModelLoader: assembled ${assembled.length} bytes in ${Date.now() - startMs}ms`);
 
-    if (fs.existsSync(outPath)) {
+      const decompress = await loadZstd();
+      const decompressed = await decompress(assembled);
+
+      if (opts.expectedSha256) {
+        const actual = crypto.createHash('sha256').update(decompressed).digest('hex');
+        if (actual !== opts.expectedSha256) {
+          throw new Error(
+            `[PATTER] R2ModelLoader: SHA-256 integrity check failed for "${opts.modelKey}". Expected ${opts.expectedSha256}, got ${actual}.`
+          );
+        }
+      }
+
+      const scratchDir = path.join(TMP_DIR, 'scratch');
+      await fs.promises.mkdir(scratchDir, { recursive: true });
+      await fs.promises.mkdir(TMP_DIR, { recursive: true });
+
+      const scratchPath = path.join(scratchDir, `${opts.modelKey}.tmp`);
+      const outPath = path.join(TMP_DIR, `${opts.modelKey}.onnx`);
+
+      if (fs.existsSync(outPath)) {
+        initSpan.setAttribute('patter.onnx.cached', true);
+        return outPath;
+      }
+
+      await fs.promises.writeFile(scratchPath, decompressed);
+      await fs.promises.rename(scratchPath, outPath);
+
+      initSpan.setAttribute('patter.onnx.size_bytes', decompressed.length);
+      initSpan.setAttribute('patter.onnx.load_ms', Date.now() - startMs);
+      getLogger().info(`[PATTER] R2ModelLoader: "${opts.modelKey}" ready at ${outPath} (${Date.now() - startMs}ms)`);
       return outPath;
+    } catch (err) {
+      initSpan.recordException(err as Error);
+      throw err;
+    } finally {
+      try { initSpan.end(); } catch { /* swallow */ }
     }
-
-    await fs.promises.writeFile(scratchPath, decompressed);
-    await fs.promises.rename(scratchPath, outPath);
-
-    getLogger().info(`[PATTER] R2ModelLoader: "${opts.modelKey}" ready at ${outPath} (${Date.now() - startMs}ms)`);
-    return outPath;
   })();
 
   loaderCache.set(cacheKey, promise);

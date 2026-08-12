@@ -17,6 +17,7 @@ import {
 } from './silero-vad';
 import { getLogger } from '../logger';
 import { fetchModelFromR2 } from '../utils/r2-model-loader';
+import { startSpan, SPAN_ONNX_INFERENCE } from '../observability';
 
 
 export const TENVAD_MODEL_ENV_VAR = 'PATTER_TENVAD_MODEL';
@@ -236,14 +237,25 @@ export class TenVAD implements VADProvider {
       input: new Tensor('float32', window, [1, window.length]),
       state: new Tensor('float32', this.rnnState, [2, 1, 128]),
     };
+    const start = Date.now();
+    const span = startSpan(SPAN_ONNX_INFERENCE, {
+      'patter.onnx.model_name': 'ten_vad',
+      'patter.onnx.sample_rate': this.sampleRate,
+    });
     try {
       const results = await this.session.run(feeds);
       const outputKey = Object.keys(results).find((k) => k !== 'stateN') ?? 'output';
       const out = results[outputKey];
       const data = out?.data as Float32Array | undefined;
-      return data?.[0] ?? 0;
-    } catch {
+      const score = data?.[0] ?? 0;
+      span.setAttribute('patter.vad.score', score);
+      span.setAttribute('patter.onnx.inference_ms', Date.now() - start);
+      return score;
+    } catch (err) {
+      span.recordException(err as Error);
       return this.calculateSpeechProbability(window);
+    } finally {
+      try { span.end(); } catch { /* swallow */ }
     }
   }
 

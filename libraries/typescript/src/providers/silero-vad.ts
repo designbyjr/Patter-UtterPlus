@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { VADEvent, VADProvider } from '../types';
+import { startSpan, SPAN_ONNX_INFERENCE } from '../observability';
 
 const SUPPORTED_SAMPLE_RATES = [8000, 16000] as const;
 /** Sample rates supported by the bundled Silero ONNX model (8 kHz or 16 kHz). */
@@ -304,21 +305,36 @@ class OnnxModel {
       sr: new Tensor('int64', this.sampleRateTensor, []),
     };
 
-    const results = await this.session.run(feeds);
-    const outputKey = Object.keys(results).find((k) => k !== 'stateN') ?? 'output';
-    const stateKey = 'stateN' in results ? 'stateN' : Object.keys(results).find((k) => k !== outputKey);
-    const out = results[outputKey];
-    const newState = stateKey ? results[stateKey] : undefined;
+    const startMs = Date.now();
+    const span = startSpan(SPAN_ONNX_INFERENCE, {
+      'patter.onnx.model_name': 'silero_vad',
+      'patter.onnx.sample_rate': this.sampleRate,
+    });
+    try {
+      const results = await this.session.run(feeds);
+      const outputKey = Object.keys(results).find((k) => k !== 'stateN') ?? 'output';
+      const stateKey = 'stateN' in results ? 'stateN' : Object.keys(results).find((k) => k !== outputKey);
+      const out = results[outputKey];
+      const newState = stateKey ? results[stateKey] : undefined;
 
-    if (newState && newState.data instanceof Float32Array) {
-      this.rnnState = Float32Array.from(newState.data);
+      if (newState && newState.data instanceof Float32Array) {
+        this.rnnState = Float32Array.from(newState.data);
+      }
+
+      // Update rolling context with the tail of the combined input.
+      this.context = this.inputBuffer.slice(-this.contextSize);
+
+      const data = out.data as Float32Array;
+      const score = data[0] ?? 0;
+      span.setAttribute('patter.vad.score', score);
+      span.setAttribute('patter.onnx.inference_ms', Date.now() - startMs);
+      return score;
+    } catch (err) {
+      span.recordException(err as Error);
+      throw err;
+    } finally {
+      try { span.end(); } catch { /* swallow */ }
     }
-
-    // Update rolling context with the tail of the combined input.
-    this.context = this.inputBuffer.slice(-this.contextSize);
-
-    const data = out.data as Float32Array;
-    return data[0] ?? 0;
   }
 
   /** Reset the RNN hidden state + rolling context to a fresh inference. */
