@@ -13,6 +13,7 @@
 
 import * as path from 'node:path';
 import { getLogger } from './logger';
+import { startSpan, SPAN_GRPC, SPAN_GRPC_STREAM } from './observability';
 
 export interface GrpcWarmupOptions {
   readonly tenVadShards?: readonly string[];
@@ -71,10 +72,14 @@ export class PatterGrpcClient {
     this.target = target ?? process.env['PATTER_GRPC_TARGET'] ?? defaultTarget;
   }
 
-
-
   private async getClient(): Promise<any> {
     if (this.clientInstance) return this.clientInstance;
+    const initSpan = startSpan(SPAN_GRPC, {
+      'patter.grpc.method': 'initClient',
+      'patter.grpc.target': this.target,
+      'patter.grpc.port': 50051,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+    });
     try {
       // @ts-ignore
       const grpc = await import('@grpc/grpc-js');
@@ -97,11 +102,15 @@ export class PatterGrpcClient {
         this.target,
         grpc.credentials.createInsecure()
       );
+      initSpan.setAttribute('patter.grpc.connected', true);
       return this.clientInstance;
     } catch (err) {
+      initSpan.recordException(err as Error);
       throw new Error(
         `PatterGrpcClient: failed to load @grpc/grpc-js or proto schema: ${(err as Error).message}`
       );
+    } finally {
+      try { initSpan.end(); } catch { /* swallow */ }
     }
   }
 
@@ -110,6 +119,14 @@ export class PatterGrpcClient {
    */
   async warmupModels(opts: GrpcWarmupOptions = {}): Promise<GrpcWarmupResult> {
     const client = await this.getClient();
+    const span = startSpan(SPAN_GRPC, {
+      'patter.grpc.method': 'WarmupModels',
+      'patter.grpc.target': this.target,
+      'patter.grpc.port': 50051,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+      'patter.onnx.ten_vad_shards': (opts.tenVadShards ?? []).length,
+      'patter.onnx.smart_turn_shards': (opts.smartTurnShards ?? []).length,
+    });
     return new Promise((resolve, reject) => {
       client.WarmupModels(
         {
@@ -119,10 +136,18 @@ export class PatterGrpcClient {
           workerEndpoint: opts.workerEndpoint ?? process.env['PATTER_R2_WORKER_URL'] ?? '',
         },
         (err: Error | null, response: any) => {
-          if (err) return reject(err);
+          if (err) {
+            span.recordException(err);
+            try { span.end(); } catch { /* swallow */ }
+            return reject(err);
+          }
+          const elapsed = Number(response.elapsedMs ?? 0);
+          span.setAttribute('patter.grpc.elapsed_ms', elapsed);
+          span.setAttribute('patter.grpc.success', Boolean(response.success));
+          try { span.end(); } catch { /* swallow */ }
           resolve({
             success: response.success,
-            elapsedMs: Number(response.elapsedMs ?? 0),
+            elapsedMs: elapsed,
             tenVadPath: response.tenVadPath ?? '',
             telnyxEosPath: response.telnyxEosPath ?? '',
             smartTurnPath: response.smartTurnPath ?? '',
@@ -138,9 +163,23 @@ export class PatterGrpcClient {
    */
   async getCapacity(): Promise<GrpcCapacityStats> {
     const client = await this.getClient();
+    const span = startSpan(SPAN_GRPC, {
+      'patter.grpc.method': 'GetCapacity',
+      'patter.grpc.target': this.target,
+      'patter.grpc.port': 50051,
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+    });
     return new Promise((resolve, reject) => {
       client.GetCapacity({}, (err: Error | null, response: any) => {
-        if (err) return reject(err);
+        if (err) {
+          span.recordException(err);
+          try { span.end(); } catch { /* swallow */ }
+          return reject(err);
+        }
+        span.setAttribute('patter.container.active_calls', response.activeCalls ?? 0);
+        span.setAttribute('patter.container.max_slots', response.maxSlots ?? 15);
+        span.setAttribute('patter.container.memory_rss_mb', response.memoryRssMb ?? 0);
+        try { span.end(); } catch { /* swallow */ }
         resolve({
           containerId: response.containerId ?? 'cpp-container',
           status: response.status ?? 'HEALTHY',
@@ -167,7 +206,23 @@ export class PatterGrpcClient {
     const stream = client.StreamAudio();
     const callSequences = new Map<string, number>();
 
+    const streamSpan = startSpan(SPAN_GRPC_STREAM, {
+      'patter.grpc.target': this.target,
+      'patter.grpc.port': 50051,
+      'patter.grpc.method': 'StreamAudio',
+      'patter.channel.bind_ip': process.env['CHANNEL_BIND_IP'] ?? '127.0.0.1',
+    });
+
     stream.on('data', (res: any) => {
+      try {
+        streamSpan.addEvent('grpc.inference_frame', {
+          'patter.call.id': res.callSessionId ?? '',
+          'patter.cpp.inference_us': Number(res.cppInferenceUs ?? 0),
+          'patter.node.roundtrip_ms': Number(res.nodeRoundtripMs ?? 0),
+          'patter.vad.score': Number(res.vadScore ?? 0),
+          'patter.eos.score': Number(res.eosScore ?? 0),
+        });
+      } catch { /* swallow */ }
       onEvent({
         callSessionId: res.callSessionId,
         vadScore: res.vadScore ?? 0,
@@ -179,6 +234,7 @@ export class PatterGrpcClient {
     });
 
     stream.on('error', (err: Error) => {
+      streamSpan.recordException(err);
       getLogger().warn(`[PATTER] gRPC AudioStream error: ${err.message}`);
     });
 
@@ -190,6 +246,7 @@ export class PatterGrpcClient {
       },
       close: () => {
         stream.end();
+        try { streamSpan.end(); } catch { /* swallow */ }
       },
     };
   }

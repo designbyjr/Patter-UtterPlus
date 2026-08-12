@@ -33,6 +33,8 @@ export const SPAN_WEBHOOK = 'getpatter.webhook';
 export const SPAN_SLOT_ACQUIRE = 'getpatter.slot.acquire';
 export const SPAN_SLOT_RELEASE = 'getpatter.slot.release';
 export const SPAN_CLOUDFLARE_PUSH = 'getpatter.cloudflare.push';
+export const SPAN_GRPC = 'getpatter.grpc';
+export const SPAN_GRPC_STREAM = 'getpatter.grpc.stream';
 
 /**
  * Minimal span surface area — subset of the OTel ``Span`` API the Patter SDK
@@ -41,6 +43,7 @@ export const SPAN_CLOUDFLARE_PUSH = 'getpatter.cloudflare.push';
 export interface Span {
   setAttribute(key: string, value: unknown): void;
   recordException(exception: unknown): void;
+  addEvent(name: string, attributes?: Record<string, unknown>): void;
   end(): void;
 }
 
@@ -269,6 +272,9 @@ class NoopSpan implements Span {
   recordException(_exception: unknown): void {
     // no-op
   }
+  addEvent(_name: string, _attributes?: Record<string, unknown>): void {
+    // no-op
+  }
   end(): void {
     // no-op
   }
@@ -280,6 +286,7 @@ const NOOP_SPAN = new NoopSpan();
 interface OtelSpan {
   setAttribute(key: string, value: unknown): unknown;
   recordException(exception: unknown): unknown;
+  addEvent?(name: string, attributes?: Record<string, unknown>): unknown;
   end(): unknown;
 }
 
@@ -301,6 +308,14 @@ class RealSpan implements Span {
   recordException(exception: unknown): void {
     try {
       this.span.recordException(exception);
+    } catch {
+      // Swallow.
+    }
+  }
+
+  addEvent(name: string, attributes?: Record<string, unknown>): void {
+    try {
+      this.span.addEvent?.(name, attributes);
     } catch {
       // Swallow.
     }
