@@ -30,7 +30,7 @@ export class PatterInferenceContainer extends Container {
         await this.env.PATTER_KV.put(`container:${containerId}`, JSON.stringify({
           containerId,
           hostname,
-          ports: [8080, 8081, 8082, 8083, 8233],
+          ports: [8080, 8081, 8082, 8083],
           status: "ready",
           startedAt: new Date().toISOString(),
         }));
@@ -38,26 +38,10 @@ export class PatterInferenceContainer extends Container {
         console.error("[Patter] Failed to register container in PATTER_KV:", err);
       }
     }
-
-    // Schedule 30s Always-On keep-alive ping loop
-    try {
-      const currentAlarm = await this.ctx.storage.getAlarm();
-      if (!currentAlarm) {
-        await this.ctx.storage.setAlarm(Date.now() + 30000);
-      }
-    } catch {}
-  }
-
-  async alarm() {
-    // 30s Keep-Alive Alarm loop: prevents scale-to-zero, enforcing Always-On 24/7 container readiness
-    try {
-      await this.containerFetch(new Request("http://localhost:8080/health"), 8080);
-    } catch {}
-    await this.ctx.storage.setAlarm(Date.now() + 30000);
   }
 
   override async onStop() {
-    console.log("[Patter] Container scale event...");
+    console.log("[Patter] C++ ONNX Inference Container sleeping (scale-to-zero)...");
     if (this.env.PATTER_KV) {
       try {
         const containerId = this.ctx.id.toString();
@@ -70,39 +54,36 @@ export class PatterInferenceContainer extends Container {
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const targetPort = url.port ? parseInt(url.port, 10) : 8080;
-    return this.containerFetch(request, targetPort);
+    if (url.hostname.startsWith("temporal") || url.pathname.startsWith("/temporal-ui") || request.headers.get("x-target-port") === "28233") {
+      return this.containerFetch(request, 28233);
+    }
+    return this.containerFetch(request, 8080);
   }
 }
 
 
+
 /**
  * Cloudflare Worker Router entry point.
- * Provides Edge-Level Load Balancing, Temporal UI Proxying, & Slot Capacity Gating across container instances.
+ * Provides Edge-Level Load Balancing & Slot Capacity Gating across N container DO instances.
  */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Dedicated Temporal Web UI Domain Route (temporal.unitedbypositives.com)
-    if (url.hostname === "temporal.unitedbypositives.com" || url.pathname.startsWith("/temporal-ui")) {
-      const primaryContainer = getContainer(env.INFERENCE_CONTAINER, "patter-pool-0");
-      // Forward to Temporal Web UI port (8233 or 8080)
-      const uiRequest = new Request(request.url, {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-      });
-      return primaryContainer.fetch(uiRequest);
-    }
-
     // Dynamic pool size & slots per container
     const configuredPoolSize = parseInt(env.CONTAINER_POOL_SIZE || "3", 10);
     const slotsPerContainer = parseInt(env.MAX_CONTAINER_CALL_SLOTS || "4", 10);
 
+    // 0. Temporal Web UI domain routing (temporal.unitedbypositives.com) -> patter-pool-0:28233
+    if (url.hostname.startsWith("temporal")) {
+      const container = getContainer(env.INFERENCE_CONTAINER, "patter-pool-0");
+      return container.fetch(request);
+    }
 
     // 1. Direct container targeting via query param (e.g. ?containerId=patter-pool-1)
     const requestedContainerId = url.searchParams.get("containerId");
+
     if (requestedContainerId) {
       const container = getContainer(env.INFERENCE_CONTAINER, requestedContainerId);
       return container.fetch(request);
