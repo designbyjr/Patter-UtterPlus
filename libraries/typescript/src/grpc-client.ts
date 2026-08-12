@@ -47,9 +47,9 @@ export interface GrpcInferenceEvent {
   readonly vadScore: number;
   readonly eosScore: number;
   readonly isUserSpeaking: boolean;
+  readonly isTurnComplete?: boolean;
   readonly blockNumber: number;
 }
-
 
 
 export interface GrpcTelemetryEvent {
@@ -173,8 +173,8 @@ export class PatterGrpcClient {
         vadScore: res.vadScore ?? 0,
         eosScore: res.eosScore ?? 0,
         isUserSpeaking: res.isUserSpeaking ?? false,
+        isTurnComplete: res.isTurnComplete ?? false,
         blockNumber: Number(res.blockNumber ?? 0),
-
       });
     });
 
