@@ -159,76 +159,8 @@ export default {
       });
     }
 
-      // Deep Container Diagnostic Mode (?full=true)
-      try {
-        const poolPromises = Array.from({ length: configuredPoolSize }, (_, i) => {
-          const cId = `patter-pool-${i}`;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 800);
-
-          const c = getContainer(env.INFERENCE_CONTAINER, cId);
-          return c.fetch(new Request("http://localhost:8080/capacity", { signal: controller.signal }))
-            .then(res => {
-              clearTimeout(timeoutId);
-              return res.ok ? res.json() as Promise<any> : null;
-            })
-            .catch(() => {
-              clearTimeout(timeoutId);
-              return null;
-            });
-        });
-
-        const poolResults = await Promise.all(poolPromises);
-        let totalMaxSlots = 0;
-        let totalActiveCalls = 0;
-        let totalAvailableSlots = 0;
-
-        const instances = poolResults.map((stats, i) => {
-          const cId = `patter-pool-${i}`;
-          if (stats && stats.maxSlots) {
-            totalMaxSlots += stats.maxSlots;
-            totalActiveCalls += stats.activeCalls || 0;
-            totalAvailableSlots += stats.availableSlots || 0;
-          } else {
-            totalMaxSlots += slotsPerContainer;
-            totalAvailableSlots += slotsPerContainer;
-          }
-          return {
-            containerId: cId,
-            status: stats ? "online" : "standby",
-            stats: stats || { maxSlots: slotsPerContainer, activeCalls: 0, availableSlots: slotsPerContainer },
-          };
-        });
-
-        return new Response(JSON.stringify({
-          status: "healthy",
-          timestamp: new Date().toISOString(),
-          mode: "container-deep",
-          poolSize: configuredPoolSize,
-          aggregatedCapacity: {
-            totalMaxSlots: totalMaxSlots || (configuredPoolSize * slotsPerContainer),
-            totalActiveCalls,
-            totalAvailableSlots: totalAvailableSlots || (configuredPoolSize * slotsPerContainer),
-          },
-          instances,
-        }), {
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-          },
-        });
-      } catch (err: any) {
-        return new Response(JSON.stringify({
-          status: "healthy",
-          mode: "edge-fallback",
-          poolSize: configuredPoolSize,
-        }), {
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
     // 4. Edge-Level Smart Load-Balancing & Capacity Gating (/media)
+
     const callSessionId = url.searchParams.get("call_session_id") || url.searchParams.get("CallSid") || "";
 
     // Track container slot allocations at the Edge
