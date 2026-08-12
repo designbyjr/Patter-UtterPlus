@@ -45,17 +45,18 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
     expect(capacity.totalMaxSlots || capacity.maxSlots).toBeGreaterThanOrEqual(4);
   });
 
-  it('3. 3 Concurrent Telnyx Phone Calls connect on exact SAME URL/Port (wss:///media) in < 5s', async () => {
+  it('3. 3 Concurrent Telnyx Phone Calls simulate a 10-second multi-turn conversation stream', async () => {
     const clients: WebSocket[] = [];
     const connectionLatencies: number[] = [];
+    const frameCounts: number[] = [0, 0, 0];
 
     const callPromises = Array.from({ length: 3 }, (_, index) => {
       return new Promise<boolean>((resolve) => {
         const callControlId = `v3:telnyx-call-ctrl-call-${index + 1}-${Date.now()}`;
         const callSessionId = `v3:telnyx-session-call-${index + 1}-${Date.now()}`;
+        const streamId = `stream-${index + 1}-${Math.random().toString(36).substring(7)}`;
 
         const wsUrl = `${LIVE_WS_URL}/?call_session_id=${callSessionId}`;
-
         const startTime = Date.now();
 
         const ws = new WebSocket(wsUrl, {
@@ -67,13 +68,68 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
         clients.push(ws);
 
         const timeout = setTimeout(() => {
-          console.error(`❌ Call #${index + 1} timed out (exceeded 10s limit)`);
+          console.error(`❌ Call #${index + 1} timed out (exceeded 20s limit)`);
+          ws.terminate();
           resolve(false);
-        }, 10000);
+        }, 20000);
 
-        ws.on('open', () => {
+        ws.on('open', async () => {
           const connectDuration = Date.now() - startTime;
           connectionLatencies.push(connectDuration);
+          console.log(`✅ Telnyx Call #${index + 1} connected in ${connectDuration} ms`);
+
+          // Step A: Send Telnyx start event
+          const telnyxStartEvent = {
+            event: 'start',
+            sequence_number: '1',
+            stream_id: streamId,
+            start: {
+              account_id: 'acc_telnyx_live',
+              call_control_id: callControlId,
+              call_leg_id: `leg_${index + 1}`,
+              call_session_id: callSessionId,
+              media_format: { encoding: 'PCMU', sample_rate: 8000, channels: 1 },
+              stream_id: streamId,
+              tracks: ['inbound'],
+            },
+          };
+          ws.send(JSON.stringify(telnyxStartEvent));
+
+          // Step B: Stream PCMU audio packets over 10 seconds (60 frames per call)
+          let seq = 2;
+          const streamInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              const telnyxMediaEvent = {
+                event: 'media',
+                sequence_number: String(seq++),
+                stream_id: streamId,
+                media: {
+                  payload: '/////w==', // 160-byte PCMU silent audio frame
+                  track: 'inbound',
+                  chunk: String(seq),
+                  timestamp: Date.now().toString(),
+                },
+              };
+              ws.send(JSON.stringify(telnyxMediaEvent));
+              frameCounts[index]++;
+            }
+          }, 160); // Send audio frame every 160ms (~6 frames/sec)
+
+          // Run multi-turn conversation stream for 10 seconds
+          await new Promise((r) => setTimeout(r, 10000));
+          clearInterval(streamInterval);
+
+          // Step C: Send Telnyx stop event
+          if (ws.readyState === WebSocket.OPEN) {
+            const telnyxStopEvent = {
+              event: 'stop',
+              sequence_number: String(seq++),
+              stream_id: streamId,
+              stop: { call_control_id: callControlId },
+            };
+            ws.send(JSON.stringify(telnyxStopEvent));
+          }
+
           clearTimeout(timeout);
           resolve(true);
         });
@@ -90,9 +146,9 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
 
     expect(results.every((r) => r === true)).toBe(true);
 
-    for (let i = 0; i < connectionLatencies.length; i++) {
-      expect(connectionLatencies[i]).toBeLessThan(10000);
-      console.log(`✅ Telnyx Call #${i + 1} connected in ${connectionLatencies[i]} ms`);
+    for (let i = 0; i < 3; i++) {
+      expect(frameCounts[i]).toBeGreaterThanOrEqual(40);
+      console.log(`🎙️ Call #${i + 1} successfully streamed ${frameCounts[i]} live audio frames over 10s!`);
     }
 
     for (const ws of clients) {
@@ -100,7 +156,8 @@ describe.skipIf(!isLiveTestEnabled)('Live Cloudflare Container Direct Ingress Mu
         ws.close();
       }
     }
-  }, 30000);
+  }, 45000);
+
 
 
   it('4. 4 Concurrent Telnyx Calls fully saturate standard-4 capacity limit', async () => {
